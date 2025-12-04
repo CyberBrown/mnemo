@@ -15,6 +15,7 @@
     "noEmit": true,
     "types": ["bun-types"]
   },
+  "files": [],
   "references": [
     { "path": "./packages/core" },
     { "path": "./packages/mcp-server" },
