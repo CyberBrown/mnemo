@@ -8,7 +8,7 @@ import {
   CacheNotFoundError,
   isUrl,
   isGitHubUrl,
-  loadGitHubRepo,
+  loadGitHubRepoViaAPI,
 } from '@mnemo/core';
 import {
   contextLoadSchema,
@@ -55,8 +55,8 @@ export async function handleContextLoad(
   let loadedSource;
   try {
     if (isGitHubUrl(input.source)) {
-      // Load from GitHub URL
-      loadedSource = await loadGitHubRepo(input.source);
+      // Load from GitHub URL via API (works in CF Workers)
+      loadedSource = await loadGitHubRepoViaAPI(input.source);
     } else if (isUrl(input.source)) {
       // Other URLs not yet supported
       throw new Error('Only GitHub URLs are currently supported for remote loading');

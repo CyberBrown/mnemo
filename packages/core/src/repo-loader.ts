@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, relative, extname, basename } from 'node:path';
 import ignore, { type Ignore } from 'ignore';
+import { unzipSync } from 'fflate';
 import type { FileInfo, LoadedSource, LoadOptions } from './types';
 import { LoadError, TokenLimitError } from './types';
 
@@ -410,4 +411,189 @@ export async function loadGitHubRepo(
       // Ignore cleanup errors
     }
   }
+}
+
+/**
+ * Load a GitHub repository via API (works in CF Workers - no filesystem needed)
+ */
+export async function loadGitHubRepoViaAPI(
+  repoUrl: string,
+  options: Partial<LoadOptions> = {}
+): Promise<LoadedSource> {
+  // Parse GitHub URL
+  const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+  if (!match) {
+    throw new LoadError(repoUrl, 'Invalid GitHub URL');
+  }
+
+  const [, owner, repo] = match;
+  const repoName = repo.replace(/\.git$/, '');
+
+  // Extract branch/ref if specified in URL (e.g., /tree/main)
+  const refMatch = repoUrl.match(/\/tree\/([^/]+)/);
+  const ref = refMatch ? refMatch[1] : 'HEAD';
+
+  // Download zipball from GitHub API
+  const zipUrl = `https://api.github.com/repos/${owner}/${repoName}/zipball/${ref}`;
+
+  const response = await fetch(zipUrl, {
+    headers: {
+      'Accept': 'application/vnd.github+json',
+      'User-Agent': 'Mnemo/0.1.0',
+    },
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new LoadError(repoUrl, `Repository not found: ${owner}/${repoName}`);
+    }
+    throw new LoadError(repoUrl, `GitHub API error: ${response.status} ${response.statusText}`);
+  }
+
+  // Get the zip data
+  const zipData = new Uint8Array(await response.arrayBuffer());
+
+  // Extract the zip
+  const extracted = unzipSync(zipData);
+
+  // Process files - GitHub zips have a root folder like "owner-repo-commitsha/"
+  const files: FileInfo[] = [];
+  const ig = ignore();
+  ig.add(ALWAYS_EXCLUDE);
+
+  // Find the root directory prefix (first entry is usually the root folder)
+  let rootPrefix = '';
+  for (const path of Object.keys(extracted)) {
+    if (path.endsWith('/')) {
+      rootPrefix = path;
+      break;
+    }
+  }
+
+  // Check for .gitignore in the archive
+  const gitignorePath = rootPrefix + '.gitignore';
+  if (extracted[gitignorePath]) {
+    const gitignoreContent = new TextDecoder().decode(extracted[gitignorePath]);
+    ig.add(gitignoreContent);
+  }
+
+  // Add custom exclude patterns
+  if (options.excludePatterns) {
+    ig.add(options.excludePatterns);
+  }
+
+  const maxTokens = options.maxTokens ?? 900000;
+  let totalTokens = 0;
+
+  for (const [path, data] of Object.entries(extracted)) {
+    // Skip directories
+    if (path.endsWith('/')) continue;
+
+    // Get relative path (remove root prefix)
+    const relativePath = path.startsWith(rootPrefix)
+      ? path.slice(rootPrefix.length)
+      : path;
+
+    // Skip if ignored
+    if (ig.ignores(relativePath)) continue;
+
+    // Check extension
+    const ext = extname(relativePath).toLowerCase();
+    const fileName = basename(relativePath);
+    const shouldInclude = options.includePatterns
+      ? options.includePatterns.some(p => relativePath.match(new RegExp(p)))
+      : DEFAULT_INCLUDE_EXTENSIONS.has(ext) || fileName === 'Dockerfile' || fileName === 'Makefile';
+
+    if (!shouldInclude) continue;
+
+    // Skip large files
+    if (data.length > 500000) continue;
+
+    // Decode content
+    let content: string;
+    try {
+      content = new TextDecoder().decode(data);
+    } catch {
+      continue; // Skip files that can't be decoded as UTF-8
+    }
+
+    // Skip binary files (check for null bytes)
+    if (content.includes('\0')) continue;
+
+    const tokenEstimate = Math.ceil(content.length / 3.5);
+    totalTokens += tokenEstimate;
+
+    // Check token limit
+    if (totalTokens > maxTokens) {
+      throw new TokenLimitError(totalTokens, maxTokens);
+    }
+
+    const mimeTypes: Record<string, string> = {
+      '.ts': 'text/typescript',
+      '.tsx': 'text/typescript',
+      '.js': 'text/javascript',
+      '.jsx': 'text/javascript',
+      '.json': 'application/json',
+      '.md': 'text/markdown',
+      '.py': 'text/x-python',
+      '.go': 'text/x-go',
+      '.rs': 'text/x-rust',
+      '.html': 'text/html',
+      '.css': 'text/css',
+      '.yaml': 'text/yaml',
+      '.yml': 'text/yaml',
+      '.sql': 'text/x-sql',
+    };
+
+    files.push({
+      path: relativePath,
+      content,
+      size: data.length,
+      tokenEstimate,
+      mimeType: mimeTypes[ext] ?? 'text/plain',
+    });
+  }
+
+  // Build combined content
+  const lines: string[] = [];
+
+  lines.push('# Repository Context');
+  lines.push(`# Source: ${repoUrl}`);
+  lines.push(`# Repository: ${owner}/${repoName}`);
+  lines.push(`# Files: ${files.length}`);
+  lines.push(`# Generated: ${new Date().toISOString()}`);
+  lines.push('');
+
+  lines.push('## File Structure');
+  lines.push('```');
+  for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) {
+    lines.push(file.path);
+  }
+  lines.push('```');
+  lines.push('');
+
+  lines.push('## File Contents');
+  lines.push('');
+
+  for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) {
+    const ext = extname(file.path).slice(1) || 'txt';
+    lines.push(`### ${file.path}`);
+    lines.push('```' + ext);
+    lines.push(file.content);
+    lines.push('```');
+    lines.push('');
+  }
+
+  return {
+    content: lines.join('\n'),
+    totalTokens,
+    fileCount: files.length,
+    files,
+    metadata: {
+      source: repoUrl,
+      loadedAt: new Date(),
+      originalSource: repoUrl,
+      clonedFrom: `${owner}/${repoName}`,
+    },
+  };
 }
