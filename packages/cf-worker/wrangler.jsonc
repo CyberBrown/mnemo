@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "mnemo",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+  
+  // D1 Database for cache metadata
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mnemo-metadata",
+      "database_id": "TO_BE_CREATED"
+    }
+  ],
+  
+  // R2 for file staging (optional)
+  "r2_buckets": [
+    {
+      "binding": "STORAGE",
+      "bucket_name": "mnemo-files"
+    }
+  ],
+  
+  // Environment variables
+  "vars": {
+    "ENVIRONMENT": "production"
+  },
+  
+  // Secrets (set via wrangler secret put)
+  // GEMINI_API_KEY
+  // MNEMO_AUTH_TOKEN (optional)
+  
+  // Development settings
+  "dev": {
+    "port": 8787,
+    "local_protocol": "http"
+  }
+}
