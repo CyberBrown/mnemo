@@ -9,8 +9,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "mnemo-metadata",
-      "database_id": "TO_BE_CREATED"
+      "database_name": "mnemo-cache",
+      "database_id": "1bf57f2d-d380-475f-8faa-b9f791d14662"
     }
   ],
   
