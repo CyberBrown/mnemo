@@ -115,6 +115,10 @@ export const LoadedSourceSchema = z.object({
     loadedAt: z.date(),
     gitCommit: z.string().optional(),
     branch: z.string().optional(),
+    /** Original URL if loaded from remote */
+    originalSource: z.string().optional(),
+    /** Owner/repo if cloned from GitHub */
+    clonedFrom: z.string().optional(),
   }),
 });
 

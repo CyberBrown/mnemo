@@ -331,9 +331,21 @@ export class RepoLoader {
 }
 
 /**
- * Load a remote GitHub repository
- * For now, this requires the repo to be cloned locally first
- * Future: Direct GitHub API integration
+ * Check if a string is a URL
+ */
+export function isUrl(source: string): boolean {
+  return source.startsWith('http://') || source.startsWith('https://');
+}
+
+/**
+ * Check if a string is a GitHub URL
+ */
+export function isGitHubUrl(source: string): boolean {
+  return /^https?:\/\/(www\.)?github\.com\//.test(source);
+}
+
+/**
+ * Load a remote GitHub repository by cloning to a temp directory
  */
 export async function loadGitHubRepo(
   repoUrl: string,
@@ -345,10 +357,57 @@ export async function loadGitHubRepo(
     throw new LoadError(repoUrl, 'Invalid GitHub URL');
   }
 
-  // For MVP, require local clone
-  // TODO: Clone to temp directory or use GitHub API
-  throw new LoadError(
-    repoUrl,
-    'Remote GitHub loading not yet implemented. Please clone the repo locally and provide the path.'
-  );
+  const [, owner, repo] = match;
+  const repoName = repo.replace(/\.git$/, '');
+
+  // Create temp directory
+  const { tmpdir } = await import('node:os');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const tempDir = await mkdtemp(join(tmpdir(), `mnemo-${repoName}-`));
+
+  try {
+    // Clone the repository
+    const { spawn } = await import('node:child_process');
+
+    await new Promise<void>((resolve, reject) => {
+      const gitProcess = spawn('git', ['clone', '--depth', '1', repoUrl, tempDir], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stderr = '';
+      gitProcess.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      gitProcess.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new LoadError(repoUrl, `Git clone failed: ${stderr}`));
+        }
+      });
+
+      gitProcess.on('error', (err) => {
+        reject(new LoadError(repoUrl, `Git clone failed: ${err.message}`));
+      });
+    });
+
+    // Load the cloned directory
+    const loader = new RepoLoader(options.maxTokens ? { maxTokens: options.maxTokens } : {});
+    const result = await loader.loadDirectory(tempDir, options);
+
+    // Update metadata to reflect original source
+    result.metadata.source = repoUrl;
+    result.metadata.originalSource = repoUrl;
+    result.metadata.clonedFrom = `${owner}/${repoName}`;
+
+    return result;
+  } finally {
+    // Clean up temp directory
+    try {
+      await rm(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
 }

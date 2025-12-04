@@ -6,6 +6,9 @@ import {
   type CacheStorage,
   type QueryResult,
   CacheNotFoundError,
+  isUrl,
+  isGitHubUrl,
+  loadGitHubRepo,
 } from '@mnemo/core';
 import {
   contextLoadSchema,
@@ -48,14 +51,23 @@ export async function handleContextLoad(
     await storage.deleteByAlias(input.alias);
   }
 
-  // Determine if source is a directory or file
+  // Determine source type and load accordingly
   let loadedSource;
   try {
-    const stats = await stat(input.source);
-    if (stats.isDirectory()) {
-      loadedSource = await repoLoader.loadDirectory(input.source);
+    if (isGitHubUrl(input.source)) {
+      // Load from GitHub URL
+      loadedSource = await loadGitHubRepo(input.source);
+    } else if (isUrl(input.source)) {
+      // Other URLs not yet supported
+      throw new Error('Only GitHub URLs are currently supported for remote loading');
     } else {
-      loadedSource = await sourceLoader.loadFile(input.source);
+      // Local path - check if directory or file
+      const stats = await stat(input.source);
+      if (stats.isDirectory()) {
+        loadedSource = await repoLoader.loadDirectory(input.source);
+      } else {
+        loadedSource = await sourceLoader.loadFile(input.source);
+      }
     }
   } catch (error) {
     throw new Error(`Failed to load source: ${(error as Error).message}`);
