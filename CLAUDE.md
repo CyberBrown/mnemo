@@ -150,3 +150,51 @@ bun test packages/core         # Test specific package
 - mcp-ts-template: https://github.com/cyanheads/mcp-ts-template (MCP patterns)
 - workers-mcp: https://github.com/cloudflare/workers-mcp (CF MCP patterns)
 - @google/genai: https://github.com/googleapis/js-genai (Gemini SDK)
+
+---
+
+## Session Notes (2025-12-04)
+
+### Deployed & Working
+- **Live URL:** https://mnemo.solamp.workers.dev
+- **D1 Database:** `mnemo-cache` (1bf57f2d-d380-475f-8faa-b9f791d14662)
+- **R2 Bucket:** `mnemo-files`
+
+### Completed This Session
+1. **GitHub URL Support** - Load any public GitHub repo via API
+   - Uses GitHub zipball API (no git binary needed)
+   - Works on CF Workers via `loadGitHubRepoViaAPI()`
+   - Supports branch refs: `/tree/branch`
+
+2. **TypeScript Config Fixed** - Project references now work
+   - Added `composite: true` to all packages
+   - Created missing `cf-worker/tsconfig.json`
+
+3. **Unit Tests Added** - 98 tests passing
+   - `packages/core/src/repo-loader.test.ts`
+   - `packages/core/src/source-loader.test.ts`
+   - `packages/mcp-server/src/tools/handlers.test.ts`
+
+4. **Infrastructure Setup**
+   - D1 database created with schema
+   - R2 bucket created
+   - Secrets via `wrangler secret put GEMINI_API_KEY`
+
+### Quick Test
+```bash
+# Load a repo
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
+  -H "Content-Type: application/json" \
+  -d '{"source": "https://github.com/CyberBrown/mnemo", "alias": "test"}'
+
+# Query it
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
+  -H "Content-Type: application/json" \
+  -d '{"alias": "test", "query": "What is this project?"}'
+```
+
+### Next Steps
+- [ ] Wire up usage_logs table (cost tracking)
+- [ ] Add composite loading (multiple sources into one cache)
+- [ ] Private repo support (GitHub token)
+- [ ] MCP stdio transport for Claude Desktop integration
