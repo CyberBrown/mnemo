@@ -147,7 +147,7 @@ export interface CacheStorage {
 // Usage Logging
 // ============================================================================
 
-export type UsageOperation = 'load' | 'query' | 'evict';
+export type UsageOperation = 'load' | 'query' | 'evict' | 'refresh';
 
 export interface UsageEntry {
   /** Cache ID (internal, not alias) */

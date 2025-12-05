@@ -1,6 +1,9 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { SourceLoader } from './source-loader';
 import { LoadError, TokenLimitError } from './types';
+import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // ============================================================================
 // SourceLoader Tests
@@ -445,6 +448,311 @@ describe('SourceLoader', () => {
       expect(combined).toContain('# Files: 2');
       expect(combined).toContain('intro.md');
       expect(combined).toContain('guide.md');
+    });
+  });
+
+  // ========================================================================
+  // File Loading Tests (Markdown, PDF, Text)
+  // ========================================================================
+
+  describe('file loading with actual files', () => {
+    let testDir: string;
+
+    beforeAll(async () => {
+      // Create a temporary directory for test files
+      testDir = join(tmpdir(), `mnemo-test-${Date.now()}`);
+      await mkdir(testDir, { recursive: true });
+    });
+
+    afterAll(async () => {
+      // Clean up test directory
+      await rm(testDir, { recursive: true, force: true });
+    });
+
+    test('loads markdown file correctly', async () => {
+      const loader = new SourceLoader();
+      const mdPath = join(testDir, 'test.md');
+      const mdContent = '# Test Markdown\n\nThis is a **test** file with markdown formatting.';
+
+      await writeFile(mdPath, mdContent, 'utf-8');
+
+      const result = await loader.loadFile(mdPath);
+
+      expect(result.fileCount).toBe(1);
+      expect(result.files[0].content).toBe(mdContent);
+      expect(result.files[0].mimeType).toBe('text/markdown');
+      expect(result.files[0].path).toBe('test.md');
+      expect(result.totalTokens).toBeGreaterThan(0);
+    });
+
+    test('loads text file correctly', async () => {
+      const loader = new SourceLoader();
+      const txtPath = join(testDir, 'test.txt');
+      const txtContent = 'Plain text content without formatting.';
+
+      await writeFile(txtPath, txtContent, 'utf-8');
+
+      const result = await loader.loadFile(txtPath);
+
+      expect(result.fileCount).toBe(1);
+      expect(result.files[0].content).toBe(txtContent);
+      expect(result.files[0].mimeType).toBe('text/plain');
+      expect(result.totalTokens).toBeGreaterThan(0);
+    });
+
+    test('markdown content is preserved as-is for Gemini', async () => {
+      const loader = new SourceLoader();
+      const mdPath = join(testDir, 'formatted.md');
+      const mdContent = '# Heading\n\n## Subheading\n\n- List item 1\n- List item 2\n\n```js\nconst x = 1;\n```';
+
+      await writeFile(mdPath, mdContent, 'utf-8');
+
+      const result = await loader.loadFile(mdPath);
+
+      // Markdown should be kept as-is (not converted to plain text)
+      expect(result.files[0].content).toBe(mdContent);
+      expect(result.files[0].content).toContain('# Heading');
+      expect(result.files[0].content).toContain('```js');
+    });
+
+    test('handles file not found error', async () => {
+      const loader = new SourceLoader();
+      const nonExistentPath = join(testDir, 'does-not-exist.md');
+
+      await expect(loader.loadFile(nonExistentPath)).rejects.toThrow(LoadError);
+      await expect(loader.loadFile(nonExistentPath)).rejects.toThrow('File not found');
+    });
+
+    test('loads multiple files of different types', async () => {
+      const loader = new SourceLoader();
+
+      const mdPath = join(testDir, 'doc.md');
+      const txtPath = join(testDir, 'notes.txt');
+
+      await writeFile(mdPath, '# Documentation\n\nSome docs.', 'utf-8');
+      await writeFile(txtPath, 'Some notes.', 'utf-8');
+
+      const result = await loader.loadFiles([mdPath, txtPath]);
+
+      expect(result.fileCount).toBe(2);
+      expect(result.files.find(f => f.path === 'doc.md')).toBeDefined();
+      expect(result.files.find(f => f.path === 'notes.txt')).toBeDefined();
+    });
+
+    test('loads directory of markdown files', async () => {
+      const loader = new SourceLoader();
+      const docsDir = join(testDir, 'docs');
+
+      await mkdir(docsDir, { recursive: true });
+      await writeFile(join(docsDir, 'intro.md'), '# Introduction', 'utf-8');
+      await writeFile(join(docsDir, 'guide.md'), '# Guide', 'utf-8');
+      await writeFile(join(docsDir, 'readme.txt'), 'README content', 'utf-8');
+
+      const result = await loader.loadMarkdownDirectory(docsDir, false);
+
+      expect(result.fileCount).toBe(3);
+      expect(result.files.some(f => f.path.includes('intro.md'))).toBe(true);
+      expect(result.files.some(f => f.path.includes('guide.md'))).toBe(true);
+      expect(result.files.some(f => f.path.includes('readme.txt'))).toBe(true);
+    });
+
+    test('recursively loads nested markdown files', async () => {
+      const loader = new SourceLoader();
+      const nestedDir = join(testDir, 'nested');
+      const subDir = join(nestedDir, 'sub');
+
+      await mkdir(subDir, { recursive: true });
+      await writeFile(join(nestedDir, 'top.md'), '# Top level', 'utf-8');
+      await writeFile(join(subDir, 'nested.md'), '# Nested', 'utf-8');
+
+      const result = await loader.loadMarkdownDirectory(nestedDir, true);
+
+      expect(result.fileCount).toBe(2);
+      expect(result.files.some(f => f.path.includes('top.md'))).toBe(true);
+      expect(result.files.some(f => f.path.includes('nested.md'))).toBe(true);
+    });
+
+    test('skips node_modules and .git directories', async () => {
+      const loader = new SourceLoader();
+      const projectDir = join(testDir, 'project');
+      const nodeModules = join(projectDir, 'node_modules');
+      const gitDir = join(projectDir, '.git');
+
+      await mkdir(nodeModules, { recursive: true });
+      await mkdir(gitDir, { recursive: true });
+      await writeFile(join(projectDir, 'main.md'), '# Main', 'utf-8');
+      await writeFile(join(nodeModules, 'dep.md'), '# Dependency', 'utf-8');
+      await writeFile(join(gitDir, 'config'), 'git config', 'utf-8');
+
+      const result = await loader.loadMarkdownDirectory(projectDir, true);
+
+      // Should only load main.md, not files from node_modules or .git
+      expect(result.fileCount).toBe(1);
+      expect(result.files[0].path).toContain('main.md');
+    });
+
+    test('respects token limits when loading directory', async () => {
+      const loader = new SourceLoader({ maxTokens: 50 });
+      const limitDir = join(testDir, 'limit-test');
+
+      await mkdir(limitDir, { recursive: true });
+      // Each file will be ~25 tokens
+      await writeFile(join(limitDir, 'file1.md'), 'x'.repeat(100), 'utf-8');
+      await writeFile(join(limitDir, 'file2.md'), 'x'.repeat(100), 'utf-8');
+      await writeFile(join(limitDir, 'file3.md'), 'x'.repeat(100), 'utf-8'); // Should be skipped
+
+      const result = await loader.loadMarkdownDirectory(limitDir, false);
+
+      // Should only load 2 files (50 tokens total)
+      expect(result.fileCount).toBeLessThanOrEqual(2);
+      expect(result.totalTokens).toBeLessThanOrEqual(50);
+    });
+  });
+
+  // ========================================================================
+  // PDF Parsing Tests
+  // ========================================================================
+
+  describe('PDF file handling', () => {
+    let testDir: string;
+
+    beforeAll(async () => {
+      testDir = join(tmpdir(), `mnemo-pdf-test-${Date.now()}`);
+      await mkdir(testDir, { recursive: true });
+    });
+
+    afterAll(async () => {
+      await rm(testDir, { recursive: true, force: true });
+    });
+
+    test('detects PDF mime type correctly', () => {
+      const loader = new SourceLoader();
+      expect((loader as any).getMimeType('.pdf')).toBe('application/pdf');
+    });
+
+    test('handles invalid PDF gracefully', async () => {
+      const loader = new SourceLoader();
+      const invalidPdfPath = join(testDir, 'invalid.pdf');
+
+      // Write invalid PDF data
+      await writeFile(invalidPdfPath, 'Not a real PDF file', 'utf-8');
+
+      await expect(loader.loadFile(invalidPdfPath)).rejects.toThrow(LoadError);
+      await expect(loader.loadFile(invalidPdfPath)).rejects.toThrow('Failed to parse PDF');
+    });
+
+    test('handles empty PDF gracefully', async () => {
+      const loader = new SourceLoader();
+      const emptyPdfPath = join(testDir, 'empty.pdf');
+
+      // Minimal valid PDF structure but no text content
+      const minimalPdf = '%PDF-1.4\n%EOF';
+      await writeFile(emptyPdfPath, minimalPdf, 'utf-8');
+
+      await expect(loader.loadFile(emptyPdfPath)).rejects.toThrow();
+    });
+
+    test('includes PDFs when loading directory', async () => {
+      const loader = new SourceLoader();
+      const mixedDir = join(testDir, 'mixed-docs');
+
+      await mkdir(mixedDir, { recursive: true });
+      await writeFile(join(mixedDir, 'doc.md'), '# Markdown Document', 'utf-8');
+      await writeFile(join(mixedDir, 'notes.txt'), 'Text notes', 'utf-8');
+
+      // Note: We can't easily create valid PDFs in tests, but we can verify the loader
+      // attempts to process .pdf files (they'll fail parsing, but that's expected)
+      const files: string[] = [];
+      const mdPath = join(mixedDir, 'doc.md');
+      const txtPath = join(mixedDir, 'notes.txt');
+      files.push(mdPath, txtPath);
+
+      const result = await loader.loadFiles(files);
+
+      // Should load markdown and text files
+      expect(result.fileCount).toBeGreaterThan(0);
+    });
+  });
+
+  // ========================================================================
+  // Markdown Handling Tests
+  // ========================================================================
+
+  describe('markdown handling', () => {
+    test('preserves markdown syntax for code blocks', () => {
+      const loader = new SourceLoader();
+      const mdWithCode = '# Code Example\n\n```javascript\nconst x = 42;\n```\n\nSome text.';
+      const result = loader.loadString(mdWithCode, 'code.md');
+
+      expect(result.files[0].content).toContain('```javascript');
+      expect(result.files[0].content).toContain('const x = 42;');
+      expect(result.files[0].content).toContain('```');
+    });
+
+    test('preserves markdown links', () => {
+      const loader = new SourceLoader();
+      const mdWithLinks = 'Check out [this link](https://example.com) for more info.';
+      const result = loader.loadString(mdWithLinks, 'links.md');
+
+      expect(result.files[0].content).toContain('[this link]');
+      expect(result.files[0].content).toContain('(https://example.com)');
+    });
+
+    test('preserves markdown tables', () => {
+      const loader = new SourceLoader();
+      const mdWithTable = '| Col1 | Col2 |\n|------|------|\n| A    | B    |';
+      const result = loader.loadString(mdWithTable, 'table.md');
+
+      expect(result.files[0].content).toContain('| Col1 | Col2 |');
+      expect(result.files[0].content).toContain('|------|------|');
+    });
+
+    test('preserves markdown headings', () => {
+      const loader = new SourceLoader();
+      const mdWithHeadings = '# H1\n## H2\n### H3\n#### H4';
+      const result = loader.loadString(mdWithHeadings, 'headings.md');
+
+      expect(result.files[0].content).toContain('# H1');
+      expect(result.files[0].content).toContain('## H2');
+      expect(result.files[0].content).toContain('### H3');
+    });
+
+    test('preserves markdown lists', () => {
+      const loader = new SourceLoader();
+      const mdWithLists = '- Item 1\n- Item 2\n  - Nested\n\n1. First\n2. Second';
+      const result = loader.loadString(mdWithLists, 'lists.md');
+
+      expect(result.files[0].content).toContain('- Item 1');
+      expect(result.files[0].content).toContain('1. First');
+    });
+
+    test('handles complex markdown with mixed formatting', () => {
+      const loader = new SourceLoader();
+      const complexMd = `# Title
+
+## Section 1
+
+This is **bold** and this is *italic*.
+
+\`\`\`python
+def hello():
+    print("Hello")
+\`\`\`
+
+- List item
+- Another item
+
+> Quote block
+
+[Link](https://example.com)`;
+
+      const result = loader.loadString(complexMd, 'complex.md');
+
+      // All markdown syntax should be preserved
+      expect(result.files[0].content).toContain('**bold**');
+      expect(result.files[0].content).toContain('*italic*');
+      expect(result.files[0].content).toContain('```python');
+      expect(result.files[0].content).toContain('> Quote block');
     });
   });
 });

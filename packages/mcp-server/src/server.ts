@@ -22,6 +22,7 @@ import {
   handleContextList,
   handleContextEvict,
   handleContextStats,
+  handleContextRefresh,
   type ToolHandlerDeps,
 } from './tools/handlers';
 
@@ -145,6 +146,9 @@ export class MnemoMCPServer {
           break;
         case 'context_stats':
           result = await handleContextStats(this.deps, args);
+          break;
+        case 'context_refresh':
+          result = await handleContextRefresh(this.deps, args);
           break;
         default:
           throw new MethodNotFoundError(`Unknown tool: ${toolName}`);

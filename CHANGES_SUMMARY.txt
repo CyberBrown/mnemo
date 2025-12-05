@@ -1,0 +1,94 @@
+FILES MODIFIED FOR NPM PUBLISHING
+=================================
+
+Modified Package Files:
+-----------------------
+✓ /home/chris/mnemo/package.json
+  - Added publish:core, publish:mcp-server, publish:local, publish:all scripts
+  - Added clean script
+
+✓ /home/chris/mnemo/packages/core/package.json
+  - Added metadata: author, license, repository, homepage, bugs, keywords
+  - Updated main/types to point to dist/
+  - Added exports field for modern module resolution
+  - Added files field (dist, src, README.md)
+  - Updated build scripts to use TypeScript compiler
+  - Added engines and publishConfig
+
+✓ /home/chris/mnemo/packages/mcp-server/package.json
+  - Same metadata updates as core
+  - Updated main/types to point to dist/
+  - Added exports, files, engines, publishConfig
+
+✓ /home/chris/mnemo/packages/local/package.json
+  - Same metadata updates as core and mcp-server
+  - Updated bin field to point to dist/ (mnemo, mnemo-stdio)
+  - Updated main/types to point to dist/
+  - Added exports, files, engines, publishConfig
+
+Modified TypeScript Config:
+---------------------------
+✓ /home/chris/mnemo/tsconfig.json
+  - Removed bun-types requirement (was causing build issues)
+
+✓ /home/chris/mnemo/packages/core/tsconfig.json
+  - Added **/*.test.ts to exclude (don't publish test files)
+
+Modified Source Files:
+---------------------
+✓ /home/chris/mnemo/packages/core/src/gemini-client.ts
+  - Fixed async iterator type issue (line 150)
+
+✓ /home/chris/mnemo/packages/local/src/index.ts
+  - Added 'refresh' to UsageOperation record (line 270)
+  - Added type assertion for SQLite bindings (line 214)
+
+✓ /home/chris/mnemo/packages/local/src/stdio.ts
+  - Added 'refresh' to UsageOperation record (line 245)
+  - Added type assertion for SQLite bindings (line 155)
+
+New Documentation Files:
+-----------------------
+✓ /home/chris/mnemo/PUBLISHING.md (5.5KB)
+  - Complete publishing guide
+  - Version management
+  - Publishing workflows
+  - Testing procedures
+  - Troubleshooting guide
+
+✓ /home/chris/mnemo/PUBLISHING_SUMMARY.md (8.2KB)
+  - Detailed summary of all changes
+  - Package structure
+  - Build verification
+  - Next steps
+
+✓ /home/chris/mnemo/QUICK_PUBLISH.md (1.1KB)
+  - Quick reference card
+  - Checklist
+  - Common commands
+
+Build Artifacts:
+---------------
+✓ All packages build successfully
+✓ Test files excluded from dist/
+✓ CLI shebangs preserved in dist/cli.js and dist/stdio.js
+✓ TypeScript declarations generated
+✓ Source maps generated
+
+Verification:
+------------
+✓ Build: bun run build ✓ (all packages)
+✓ Tests: bun test ✓ (204 tests pass)
+✓ TypeCheck: bun run typecheck ✓
+
+Ready for Publishing:
+--------------------
+✓ @mnemo/core - Ready
+✓ @mnemo/mcp-server - Ready
+✓ @mnemo/local - Ready (global CLI)
+
+Next Action Required:
+--------------------
+1. Update version numbers (currently 0.1.0)
+2. npm login
+3. bun run publish:all

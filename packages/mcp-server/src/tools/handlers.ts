@@ -19,10 +19,12 @@ import {
   contextQuerySchema,
   contextEvictSchema,
   contextStatsSchema,
+  contextRefreshSchema,
   type ContextLoadInput,
   type ContextQueryInput,
   type ContextEvictInput,
   type ContextStatsInput,
+  type ContextRefreshInput,
 } from './schemas';
 import { stat } from 'node:fs/promises';
 
@@ -311,5 +313,91 @@ export async function handleContextStats(
       alias: c.alias,
       tokenCount: c.tokenCount,
     })),
+  };
+}
+
+/**
+ * Refresh an existing cache by re-fetching source content
+ */
+export async function handleContextRefresh(
+  deps: ToolHandlerDeps,
+  rawInput: unknown
+): Promise<{ success: true; cache: CacheMetadata; previousTokenCount: number; newTokenCount: number }> {
+  const input = contextRefreshSchema.parse(rawInput);
+  const { geminiClient, storage } = deps;
+
+  // Get existing cache
+  const existingCache = await storage.getByAlias(input.alias);
+  if (!existingCache) {
+    throw new CacheNotFoundError(input.alias);
+  }
+
+  // Store previous metadata
+  const previousTokenCount = existingCache.tokenCount;
+  const previousSource = existingCache.source;
+
+  // Determine sources to load (parse the source field for composite caches)
+  const sourcesToLoad = previousSource.includes(' + ')
+    ? previousSource.split(' + ')
+    : [previousSource];
+
+  // Use previous TTL if not specified, otherwise use new TTL
+  const ttl = input.ttl ?? Math.floor((existingCache.expiresAt.getTime() - existingCache.createdAt.getTime()) / 1000);
+
+  // Re-load all sources
+  let loadedSource: LoadedSource;
+  try {
+    if (sourcesToLoad.length === 1) {
+      loadedSource = await loadSingleSource(sourcesToLoad[0], deps, input.githubToken);
+    } else {
+      // Composite loading - load all and combine
+      const loadedSources = await Promise.all(
+        sourcesToLoad.map((s) => loadSingleSource(s, deps, input.githubToken))
+      );
+      loadedSource = combineLoadedSources(loadedSources, sourcesToLoad);
+    }
+  } catch (error) {
+    throw new Error(`Failed to refresh source: ${(error as Error).message}`);
+  }
+
+  // Delete old cache from Gemini
+  try {
+    await geminiClient.deleteCache(existingCache.name);
+  } catch {
+    // Ignore if already expired
+  }
+
+  // Create new Gemini cache with refreshed content
+  const cacheMetadata = await geminiClient.createCache(
+    loadedSource.content,
+    input.alias,
+    {
+      ttl,
+      systemInstruction: input.systemInstruction,
+    }
+  );
+
+  // Update with actual source info
+  cacheMetadata.source = loadedSource.metadata.source;
+  cacheMetadata.tokenCount = loadedSource.totalTokens;
+
+  // Store updated metadata
+  await storage.save(cacheMetadata);
+
+  // Log usage
+  if (deps.usageLogger) {
+    await deps.usageLogger.log({
+      cacheId: cacheMetadata.name,
+      operation: 'refresh',
+      tokensUsed: loadedSource.totalTokens,
+      cachedTokensUsed: 0, // Refresh creates new cache, no cached tokens yet
+    });
+  }
+
+  return {
+    success: true,
+    cache: cacheMetadata,
+    previousTokenCount,
+    newTokenCount: loadedSource.totalTokens,
   };
 }

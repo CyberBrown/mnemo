@@ -147,7 +147,8 @@ export class GeminiClient {
       }> = [];
 
       // The SDK returns an async iterator
-      for await (const cache of this.ai.caches.list()) {
+      const cacheList = this.ai.caches.list();
+      for await (const cache of cacheList as any) {
         caches.push({
           name: cache.name ?? '',
           displayName: cache.displayName,

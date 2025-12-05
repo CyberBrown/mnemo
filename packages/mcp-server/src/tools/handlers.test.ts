@@ -5,6 +5,7 @@ import {
   handleContextList,
   handleContextEvict,
   handleContextStats,
+  handleContextRefresh,
   type ToolHandlerDeps,
 } from './handlers';
 import type { CacheMetadata, CacheStorage, QueryResult, LoadedSource } from '@mnemo/core';
@@ -1014,6 +1015,7 @@ describe('Error Handling', () => {
     await expect(handleContextLoad(deps, { bad: 'input' })).rejects.toThrow();
     await expect(handleContextQuery(deps, { bad: 'input' })).rejects.toThrow();
     await expect(handleContextEvict(deps, { bad: 'input' })).rejects.toThrow();
+    await expect(handleContextRefresh(deps, { bad: 'input' })).rejects.toThrow();
   });
 
   test('handlers propagate CacheNotFoundError', async () => {
@@ -1032,5 +1034,373 @@ describe('Error Handling', () => {
     await expect(
       handleContextStats(deps, { alias })
     ).rejects.toThrow(CacheNotFoundError);
+
+    await expect(
+      handleContextRefresh(deps, { alias })
+    ).rejects.toThrow(CacheNotFoundError);
+  });
+});
+
+// ============================================================================
+// handleContextRefresh Tests
+// ============================================================================
+
+describe('handleContextRefresh', () => {
+  let statSpy: any;
+
+  beforeEach(() => {
+    statSpy = mockStatForDirectory();
+  });
+
+  afterEach(() => {
+    statSpy?.mockRestore();
+  });
+
+  test('refreshes an existing cache successfully', async () => {
+    const deps = createMockDeps();
+
+    // Create initial cache
+    await handleContextLoad(deps, {
+      source: '/test/original',
+      alias: 'test-cache',
+      ttl: 3600,
+    });
+
+    const initialCache = await deps.storage.getByAlias('test-cache');
+    expect(initialCache).toBeTruthy();
+
+    // Clear mocks to track refresh calls
+    (deps.geminiClient.deleteCache as any).mockClear();
+    (deps.geminiClient.createCache as any).mockClear();
+    (deps.storage.save as any).mockClear();
+
+    // Refresh the cache
+    const result = await handleContextRefresh(deps, {
+      alias: 'test-cache',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.cache.alias).toBe('test-cache');
+    expect(result.previousTokenCount).toBeGreaterThan(0);
+    expect(result.newTokenCount).toBeGreaterThan(0);
+    expect(deps.geminiClient.deleteCache).toHaveBeenCalledTimes(1);
+    expect(deps.geminiClient.createCache).toHaveBeenCalledTimes(1);
+    expect(deps.storage.save).toHaveBeenCalledTimes(1);
+  });
+
+  test('throws CacheNotFoundError for non-existent cache', async () => {
+    const deps = createMockDeps();
+
+    await expect(
+      handleContextRefresh(deps, { alias: 'non-existent' })
+    ).rejects.toThrow(CacheNotFoundError);
+  });
+
+  test('preserves TTL when not specified', async () => {
+    const deps = createMockDeps();
+
+    // Create cache with specific TTL
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test-cache',
+      ttl: 7200, // 2 hours
+    });
+
+    const initialCache = await deps.storage.getByAlias('test-cache');
+    const initialTtl = Math.floor(
+      (initialCache!.expiresAt.getTime() - initialCache!.createdAt.getTime()) / 1000
+    );
+
+    expect(initialTtl).toBe(7200);
+
+    // Refresh without specifying TTL
+    await handleContextRefresh(deps, {
+      alias: 'test-cache',
+    });
+
+    // Check that createCache was called with original TTL
+    const createCacheCall = (deps.geminiClient.createCache as any).mock.calls[1]; // Second call (after initial load)
+    const options = createCacheCall[2];
+    expect(options.ttl).toBe(7200);
+  });
+
+  test('updates TTL when specified', async () => {
+    const deps = createMockDeps();
+
+    // Create cache with initial TTL
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test-cache',
+      ttl: 3600,
+    });
+
+    // Refresh with new TTL
+    await handleContextRefresh(deps, {
+      alias: 'test-cache',
+      ttl: 7200, // New TTL
+    });
+
+    // Check that createCache was called with new TTL
+    const createCacheCall = (deps.geminiClient.createCache as any).mock.calls[1];
+    const options = createCacheCall[2];
+    expect(options.ttl).toBe(7200);
+  });
+
+  test('updates system instruction when specified', async () => {
+    const deps = createMockDeps();
+
+    // Create cache without system instruction
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test-cache',
+      ttl: 3600,
+    });
+
+    // Refresh with new system instruction
+    await handleContextRefresh(deps, {
+      alias: 'test-cache',
+      systemInstruction: 'You are a helpful assistant',
+    });
+
+    // Check that createCache was called with system instruction
+    const createCacheCall = (deps.geminiClient.createCache as any).mock.calls[1];
+    const options = createCacheCall[2];
+    expect(options.systemInstruction).toBe('You are a helpful assistant');
+  });
+
+  test('re-fetches source content on refresh', async () => {
+    const deps = createMockDeps();
+
+    // Create initial cache
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test-cache',
+      ttl: 3600,
+    });
+
+    // Track load calls
+    const initialLoadCalls = (deps.repoLoader.loadDirectory as any).mock.calls.length;
+
+    // Refresh cache
+    await handleContextRefresh(deps, {
+      alias: 'test-cache',
+    });
+
+    // Should have loaded again
+    const finalLoadCalls = (deps.repoLoader.loadDirectory as any).mock.calls.length;
+    expect(finalLoadCalls).toBe(initialLoadCalls + 1);
+  });
+
+  test('handles composite caches (multiple sources)', async () => {
+    const deps = createMockDeps();
+
+    // Create composite cache
+    await handleContextLoad(deps, {
+      sources: ['/test/source1', '/test/source2'],
+      alias: 'composite-cache',
+      ttl: 3600,
+    });
+
+    // Clear mocks
+    (deps.repoLoader.loadDirectory as any).mockClear();
+
+    // Refresh composite cache
+    const result = await handleContextRefresh(deps, {
+      alias: 'composite-cache',
+    });
+
+    expect(result.success).toBe(true);
+    // Should reload both sources
+    expect(deps.repoLoader.loadDirectory).toHaveBeenCalledTimes(2);
+  });
+
+  test('reports token count changes', async () => {
+    const deps = createMockDeps();
+
+    // Mock different token counts for initial vs refresh
+    let callCount = 0;
+    (deps.repoLoader.loadDirectory as any).mockImplementation(async (path: string) => {
+      callCount++;
+      const tokens = callCount === 1 ? 1000 : 1500; // Different counts
+      return {
+        content: `Content ${callCount}`,
+        totalTokens: tokens,
+        fileCount: 5,
+        files: [],
+        metadata: { source: path, loadedAt: new Date() },
+      };
+    });
+
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test-cache',
+      ttl: 3600,
+    });
+
+    const result = await handleContextRefresh(deps, {
+      alias: 'test-cache',
+    });
+
+    expect(result.previousTokenCount).toBe(1000);
+    expect(result.newTokenCount).toBe(1500);
+  });
+
+  test('validates input schema', async () => {
+    const deps = createMockDeps();
+
+    // Missing alias should fail
+    await expect(handleContextRefresh(deps, {})).rejects.toThrow();
+
+    // Empty alias should fail
+    await expect(handleContextRefresh(deps, { alias: '' })).rejects.toThrow();
+
+    // Invalid TTL should fail
+    await expect(
+      handleContextRefresh(deps, { alias: 'test', ttl: 30 })
+    ).rejects.toThrow();
+
+    await expect(
+      handleContextRefresh(deps, { alias: 'test', ttl: 90000 })
+    ).rejects.toThrow();
+  });
+
+  test('handles Gemini deletion errors gracefully', async () => {
+    const deps = createMockDeps();
+
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test-cache',
+      ttl: 3600,
+    });
+
+    // Make deleteCache throw an error (e.g., cache already expired)
+    (deps.geminiClient.deleteCache as any).mockImplementation(async () => {
+      throw new Error('Cache already expired');
+    });
+
+    // Should still succeed
+    const result = await handleContextRefresh(deps, {
+      alias: 'test-cache',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('logs refresh operation with usage logger', async () => {
+    const deps = createMockDeps();
+    const usageLogger = {
+      log: mock(async () => {}),
+      getStats: mock(async () => ({
+        totalOperations: 0,
+        totalTokensUsed: 0,
+        totalCachedTokensUsed: 0,
+        estimatedCost: 0,
+        byOperation: {
+          load: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
+          query: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
+          evict: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
+          refresh: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
+        },
+      })),
+      getRecent: mock(async () => []),
+    };
+    deps.usageLogger = usageLogger as any;
+
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test-cache',
+      ttl: 3600,
+    });
+
+    usageLogger.log.mockClear();
+
+    await handleContextRefresh(deps, {
+      alias: 'test-cache',
+    });
+
+    expect(usageLogger.log).toHaveBeenCalledTimes(1);
+    expect(usageLogger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'refresh',
+        tokensUsed: expect.any(Number),
+        cachedTokensUsed: 0, // Refresh creates new cache
+      })
+    );
+  });
+
+  test('works without usage logger', async () => {
+    const deps = createMockDeps();
+    // No usageLogger set
+
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test-cache',
+      ttl: 3600,
+    });
+
+    // Should not throw
+    const result = await handleContextRefresh(deps, {
+      alias: 'test-cache',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('passes githubToken when refreshing GitHub repos', async () => {
+    const deps = createMockDeps();
+
+    // Create initial cache (schema validation test)
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test-cache',
+      ttl: 3600,
+    });
+
+    // Refresh with githubToken should be accepted by schema
+    const result = await handleContextRefresh(deps, {
+      alias: 'test-cache',
+      githubToken: 'ghp_test_token',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('handles refresh failure gracefully', async () => {
+    const deps = createMockDeps();
+
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test-cache',
+      ttl: 3600,
+    });
+
+    // Make repoLoader fail on refresh
+    (deps.repoLoader.loadDirectory as any).mockImplementationOnce(async () => {
+      throw new Error('Failed to load directory');
+    });
+
+    await expect(
+      handleContextRefresh(deps, { alias: 'test-cache' })
+    ).rejects.toThrow('Failed to refresh source');
+  });
+
+  test('preserves alias after refresh', async () => {
+    const deps = createMockDeps();
+
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'my-special-cache',
+      ttl: 3600,
+    });
+
+    const result = await handleContextRefresh(deps, {
+      alias: 'my-special-cache',
+    });
+
+    expect(result.cache.alias).toBe('my-special-cache');
+
+    // Verify it's still queryable with same alias
+    const caches = await handleContextList(deps);
+    expect(caches.caches.find(c => c.alias === 'my-special-cache')).toBeTruthy();
   });
 });

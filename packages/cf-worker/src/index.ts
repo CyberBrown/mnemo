@@ -31,18 +31,39 @@ const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors());
 app.use('*', logger());
 
-// Optional auth middleware
-app.use('*', async (c, next) => {
-  const authToken = c.env.MNEMO_AUTH_TOKEN;
-  if (authToken) {
-    const header = c.req.header('Authorization');
-    const token = header?.replace('Bearer ', '');
-    if (token !== authToken) {
-      return c.json({ error: 'Unauthorized' }, 401);
+// Authentication middleware factory
+// Returns 401 if MNEMO_AUTH_TOKEN is configured and request doesn't have valid Bearer token
+// If no token is configured, allows unauthenticated access (backwards compatible)
+const requireAuth = () => {
+  return async (c: any, next: any) => {
+    const authToken = c.env.MNEMO_AUTH_TOKEN;
+
+    // If no auth token configured, allow access
+    if (!authToken) {
+      return await next();
     }
-  }
-  await next();
-});
+
+    // Auth token is configured, validate request
+    const header = c.req.header('Authorization');
+    if (!header) {
+      return c.json({
+        error: 'Unauthorized',
+        message: 'Missing Authorization header. Use: Authorization: Bearer <token>'
+      }, 401);
+    }
+
+    const token = header.replace(/^Bearer\s+/i, '');
+    if (token !== authToken) {
+      return c.json({
+        error: 'Unauthorized',
+        message: 'Invalid authentication token'
+      }, 401);
+    }
+
+    // Valid token, proceed
+    return await next();
+  };
+};
 
 // ============================================================================
 // Routes
@@ -77,10 +98,10 @@ app.get('/tools', (c) => {
   return c.json({ tools: toolDefinitions });
 });
 
-// MCP protocol endpoint
-app.post('/mcp', async (c) => {
+// MCP protocol endpoint (protected)
+app.post('/mcp', requireAuth(), async (c) => {
   const server = createMCPServer(c.env);
-  
+
   try {
     const request = await c.req.json();
     const response = await server.handleRequest(request);
@@ -97,11 +118,11 @@ app.post('/mcp', async (c) => {
   }
 });
 
-// Direct tool invocation (convenience endpoints)
-app.post('/tools/:toolName', async (c) => {
+// Direct tool invocation (convenience endpoints, protected)
+app.post('/tools/:toolName', requireAuth(), async (c) => {
   const toolName = c.req.param('toolName');
   const server = createMCPServer(c.env);
-  
+
   try {
     const args = await c.req.json();
     const response = await server.handleRequest({
@@ -113,7 +134,7 @@ app.post('/tools/:toolName', async (c) => {
         arguments: args,
       },
     });
-    
+
     // Extract result from MCP response
     if ('result' in response && response.result) {
       return c.json(response.result);
@@ -343,6 +364,7 @@ class D1UsageLogger implements UsageLogger {
       load: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
       query: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
       evict: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
+      refresh: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
     };
 
     for (const row of byOpResults.results ?? []) {
