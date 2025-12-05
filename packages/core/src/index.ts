@@ -5,5 +5,5 @@ export * from './types';
 export { GeminiClient } from './gemini-client';
 
 // Loaders
-export { RepoLoader, loadGitHubRepo, loadGitHubRepoViaAPI, isUrl, isGitHubUrl } from './repo-loader';
+export { RepoLoader, loadGitHubRepo, loadGitHubRepoViaAPI, isUrl, isGitHubUrl, type GitHubLoadOptions } from './repo-loader';
 export { SourceLoader } from './source-loader';

@@ -33,6 +33,12 @@ async function main() {
         await import('./index');
         break;
 
+      case 'stdio':
+      case '--stdio':
+        // Start MCP stdio transport for Claude Desktop
+        await import('./stdio');
+        break;
+
       case 'load': {
         const source = args[1];
         const alias = args[2];
@@ -121,7 +127,8 @@ Usage:
   mnemo <command> [arguments]
 
 Commands:
-  serve                     Start the Mnemo server
+  serve                     Start the Mnemo HTTP server
+  stdio                     Start MCP stdio transport (for Claude Desktop)
   load <path> <alias>       Load a directory/file into cache
   query <alias> <question>  Query a cached context
   list                      List all active caches

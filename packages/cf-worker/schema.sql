@@ -25,9 +25,10 @@ CREATE INDEX IF NOT EXISTS idx_caches_expires ON caches(expires_at);
 CREATE INDEX IF NOT EXISTS idx_caches_user ON caches(user_id);
 
 -- Usage logs table
+-- Note: cache_id stores the Gemini cache name, not foreign key to caches.id
 CREATE TABLE IF NOT EXISTS usage_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  cache_id TEXT REFERENCES caches(id) ON DELETE CASCADE,
+  cache_id TEXT,
   operation TEXT NOT NULL, -- 'load', 'query', 'evict'
   tokens_used INTEGER DEFAULT 0,
   cached_tokens_used INTEGER DEFAULT 0,

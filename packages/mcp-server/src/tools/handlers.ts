@@ -5,10 +5,14 @@ import {
   type CacheMetadata,
   type CacheStorage,
   type QueryResult,
+  type UsageLogger,
+  type UsageStats,
+  type LoadedSource,
   CacheNotFoundError,
   isUrl,
   isGitHubUrl,
   loadGitHubRepoViaAPI,
+  calculateCost,
 } from '@mnemo/core';
 import {
   contextLoadSchema,
@@ -27,6 +31,66 @@ export interface ToolHandlerDeps {
   storage: CacheStorage;
   repoLoader: RepoLoader;
   sourceLoader: SourceLoader;
+  usageLogger?: UsageLogger;
+}
+
+/**
+ * Load a single source (helper for composite loading)
+ */
+async function loadSingleSource(
+  source: string,
+  deps: ToolHandlerDeps,
+  githubToken?: string
+): Promise<LoadedSource> {
+  const { repoLoader, sourceLoader } = deps;
+
+  if (isGitHubUrl(source)) {
+    return loadGitHubRepoViaAPI(source, { githubToken });
+  } else if (isUrl(source)) {
+    throw new Error('Only GitHub URLs are currently supported for remote loading');
+  } else {
+    const stats = await stat(source);
+    if (stats.isDirectory()) {
+      return repoLoader.loadDirectory(source);
+    } else {
+      return sourceLoader.loadFile(source);
+    }
+  }
+}
+
+/**
+ * Combine multiple loaded sources into one
+ */
+function combineLoadedSources(sources: LoadedSource[], sourceNames: string[]): LoadedSource {
+  const allFiles = sources.flatMap((s) => s.files);
+  const totalTokens = sources.reduce((sum, s) => sum + s.totalTokens, 0);
+  const fileCount = sources.reduce((sum, s) => sum + s.fileCount, 0);
+
+  // Build combined content
+  const lines: string[] = [];
+  lines.push('# Combined Context');
+  lines.push(`# Sources: ${sourceNames.join(', ')}`);
+  lines.push(`# Total Files: ${fileCount}`);
+  lines.push(`# Generated: ${new Date().toISOString()}`);
+  lines.push('');
+
+  for (let i = 0; i < sources.length; i++) {
+    lines.push(`## Source ${i + 1}: ${sourceNames[i]}`);
+    lines.push('');
+    lines.push(sources[i].content);
+    lines.push('');
+  }
+
+  return {
+    content: lines.join('\n'),
+    totalTokens,
+    fileCount,
+    files: allFiles,
+    metadata: {
+      source: sourceNames.join(' + '),
+      loadedAt: new Date(),
+    },
+  };
 }
 
 /**
@@ -35,9 +99,9 @@ export interface ToolHandlerDeps {
 export async function handleContextLoad(
   deps: ToolHandlerDeps,
   rawInput: unknown
-): Promise<{ success: true; cache: CacheMetadata }> {
+): Promise<{ success: true; cache: CacheMetadata; sourcesLoaded: number }> {
   const input = contextLoadSchema.parse(rawInput);
-  const { geminiClient, storage, repoLoader, sourceLoader } = deps;
+  const { geminiClient, storage } = deps;
 
   // Check if alias already exists
   const existing = await storage.getByAlias(input.alias);
@@ -51,23 +115,23 @@ export async function handleContextLoad(
     await storage.deleteByAlias(input.alias);
   }
 
-  // Determine source type and load accordingly
-  let loadedSource;
+  // Get list of sources to load
+  const sourcesToLoad = input.sources ?? (input.source ? [input.source] : []);
+  if (sourcesToLoad.length === 0) {
+    throw new Error('No sources provided');
+  }
+
+  // Load all sources
+  let loadedSource: LoadedSource;
   try {
-    if (isGitHubUrl(input.source)) {
-      // Load from GitHub URL via API (works in CF Workers)
-      loadedSource = await loadGitHubRepoViaAPI(input.source);
-    } else if (isUrl(input.source)) {
-      // Other URLs not yet supported
-      throw new Error('Only GitHub URLs are currently supported for remote loading');
+    if (sourcesToLoad.length === 1) {
+      loadedSource = await loadSingleSource(sourcesToLoad[0], deps, input.githubToken);
     } else {
-      // Local path - check if directory or file
-      const stats = await stat(input.source);
-      if (stats.isDirectory()) {
-        loadedSource = await repoLoader.loadDirectory(input.source);
-      } else {
-        loadedSource = await sourceLoader.loadFile(input.source);
-      }
+      // Composite loading - load all and combine
+      const loadedSources = await Promise.all(
+        sourcesToLoad.map((s) => loadSingleSource(s, deps, input.githubToken))
+      );
+      loadedSource = combineLoadedSources(loadedSources, sourcesToLoad);
     }
   } catch (error) {
     throw new Error(`Failed to load source: ${(error as Error).message}`);
@@ -84,13 +148,23 @@ export async function handleContextLoad(
   );
 
   // Update with actual source info
-  cacheMetadata.source = input.source;
+  cacheMetadata.source = loadedSource.metadata.source;
   cacheMetadata.tokenCount = loadedSource.totalTokens;
 
   // Store in local storage
   await storage.save(cacheMetadata);
 
-  return { success: true, cache: cacheMetadata };
+  // Log usage
+  if (deps.usageLogger) {
+    await deps.usageLogger.log({
+      cacheId: cacheMetadata.name,
+      operation: 'load',
+      tokensUsed: loadedSource.totalTokens,
+      cachedTokensUsed: 0, // Initial load isn't cached yet
+    });
+  }
+
+  return { success: true, cache: cacheMetadata, sourcesLoaded: sourcesToLoad.length };
 }
 
 /**
@@ -120,6 +194,16 @@ export async function handleContextQuery(
     maxOutputTokens: input.maxTokens,
     temperature: input.temperature,
   });
+
+  // Log usage
+  if (deps.usageLogger) {
+    await deps.usageLogger.log({
+      cacheId: cache.name,
+      operation: 'query',
+      tokensUsed: result.tokensUsed,
+      cachedTokensUsed: result.cachedTokensUsed,
+    });
+  }
 
   return result;
 }
@@ -166,6 +250,16 @@ export async function handleContextEvict(
     // Might already be expired, that's ok
   }
 
+  // Log usage before deleting
+  if (deps.usageLogger) {
+    await deps.usageLogger.log({
+      cacheId: cache.name,
+      operation: 'evict',
+      tokensUsed: 0,
+      cachedTokensUsed: 0,
+    });
+  }
+
   // Delete from local storage
   await storage.deleteByAlias(input.alias);
 
@@ -181,12 +275,16 @@ export async function handleContextStats(
 ): Promise<{
   totalCaches: number;
   totalTokens: number;
-  caches?: Array<{ alias: string; tokenCount: number; queriesCount?: number }>;
+  usage?: UsageStats;
+  caches?: Array<{ alias: string; tokenCount: number }>;
 }> {
   const input = contextStatsSchema.parse(rawInput);
-  const { storage } = deps;
+  const { storage, usageLogger } = deps;
 
   const allCaches = await storage.list();
+
+  // Get usage stats if logger is available
+  const usage = usageLogger ? await usageLogger.getStats() : undefined;
 
   if (input.alias) {
     // Stats for specific cache
@@ -197,6 +295,7 @@ export async function handleContextStats(
     return {
       totalCaches: 1,
       totalTokens: cache.tokenCount,
+      usage,
       caches: [{ alias: cache.alias, tokenCount: cache.tokenCount }],
     };
   }
@@ -207,6 +306,7 @@ export async function handleContextStats(
   return {
     totalCaches: allCaches.length,
     totalTokens,
+    usage,
     caches: allCaches.map((c) => ({
       alias: c.alias,
       tokenCount: c.tokenCount,

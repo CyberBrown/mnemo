@@ -3,6 +3,7 @@ import {
   RepoLoader,
   SourceLoader,
   type CacheStorage,
+  type UsageLogger,
   MnemoError,
 } from '@mnemo/core';
 import {
@@ -29,6 +30,7 @@ export interface MnemoMCPServerConfig {
   storage: CacheStorage;
   repoLoader?: RepoLoader;
   sourceLoader?: SourceLoader;
+  usageLogger?: UsageLogger;
 }
 
 /**
@@ -44,6 +46,7 @@ export class MnemoMCPServer {
       storage: config.storage,
       repoLoader: config.repoLoader ?? new RepoLoader(),
       sourceLoader: config.sourceLoader ?? new SourceLoader(),
+      usageLogger: config.usageLogger,
     };
   }
 

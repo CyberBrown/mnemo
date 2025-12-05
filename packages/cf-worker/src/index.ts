@@ -1,7 +1,18 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import { GeminiClient, type CacheStorage, type CacheMetadata, type CacheListItem, MnemoConfigSchema } from '@mnemo/core';
+import {
+  GeminiClient,
+  type CacheStorage,
+  type CacheMetadata,
+  type CacheListItem,
+  type UsageLogger,
+  type UsageEntry,
+  type UsageStats,
+  type UsageOperation,
+  MnemoConfigSchema,
+  calculateCost,
+} from '@mnemo/core';
 import { MnemoMCPServer, toolDefinitions } from '@mnemo/mcp-server';
 
 // Cloudflare bindings type
@@ -124,13 +135,15 @@ function createMCPServer(env: Env): MnemoMCPServer {
   const config = MnemoConfigSchema.parse({
     geminiApiKey: env.GEMINI_API_KEY,
   });
-  
+
   const geminiClient = new GeminiClient(config);
   const storage = new D1CacheStorage(env.DB);
-  
+  const usageLogger = new D1UsageLogger(env.DB);
+
   return new MnemoMCPServer({
     geminiClient,
     storage,
+    usageLogger,
   });
 }
 
@@ -267,6 +280,118 @@ class D1CacheStorage implements CacheStorage {
       .prepare(`UPDATE caches SET ${sets.join(', ')} WHERE alias = ?`)
       .bind(...values)
       .run();
+  }
+}
+
+// ============================================================================
+// D1 Usage Logger Implementation
+// ============================================================================
+
+class D1UsageLogger implements UsageLogger {
+  constructor(private db: D1Database) {}
+
+  async log(entry: Omit<UsageEntry, 'createdAt'>): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO usage_logs (cache_id, operation, tokens_used, cached_tokens_used)
+         VALUES (?, ?, ?, ?)`
+      )
+      .bind(entry.cacheId, entry.operation, entry.tokensUsed, entry.cachedTokensUsed)
+      .run();
+  }
+
+  async getStats(cacheId?: string): Promise<UsageStats> {
+    const whereClause = cacheId ? 'WHERE cache_id = ?' : '';
+
+    // Get totals
+    const totalsStmt = this.db.prepare(
+      `SELECT
+        COUNT(*) as total_ops,
+        COALESCE(SUM(tokens_used), 0) as total_tokens,
+        COALESCE(SUM(cached_tokens_used), 0) as total_cached
+       FROM usage_logs ${whereClause}`
+    );
+    const totals = cacheId
+      ? await totalsStmt.bind(cacheId).first<{ total_ops: number; total_tokens: number; total_cached: number }>()
+      : await totalsStmt.first<{ total_ops: number; total_tokens: number; total_cached: number }>();
+
+    // Get breakdown by operation
+    const byOpStmt = this.db.prepare(
+      `SELECT
+        operation,
+        COUNT(*) as count,
+        COALESCE(SUM(tokens_used), 0) as tokens_used,
+        COALESCE(SUM(cached_tokens_used), 0) as cached_tokens_used
+       FROM usage_logs ${whereClause}
+       GROUP BY operation`
+    );
+    const byOpResults = cacheId
+      ? await byOpStmt.bind(cacheId).all<{
+          operation: string;
+          count: number;
+          tokens_used: number;
+          cached_tokens_used: number;
+        }>()
+      : await byOpStmt.all<{
+          operation: string;
+          count: number;
+          tokens_used: number;
+          cached_tokens_used: number;
+        }>();
+
+    const byOperation: Record<UsageOperation, { count: number; tokensUsed: number; cachedTokensUsed: number }> = {
+      load: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
+      query: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
+      evict: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
+    };
+
+    for (const row of byOpResults.results ?? []) {
+      const op = row.operation as UsageOperation;
+      if (op in byOperation) {
+        byOperation[op] = {
+          count: row.count,
+          tokensUsed: row.tokens_used,
+          cachedTokensUsed: row.cached_tokens_used,
+        };
+      }
+    }
+
+    const totalTokens = totals?.total_tokens ?? 0;
+    const totalCached = totals?.total_cached ?? 0;
+
+    return {
+      totalOperations: totals?.total_ops ?? 0,
+      totalTokensUsed: totalTokens,
+      totalCachedTokensUsed: totalCached,
+      estimatedCost: calculateCost(totalTokens, totalCached),
+      byOperation,
+    };
+  }
+
+  async getRecent(limit = 100): Promise<UsageEntry[]> {
+    const results = await this.db
+      .prepare(
+        `SELECT cache_id, operation, tokens_used, cached_tokens_used, created_at
+         FROM usage_logs
+         ORDER BY created_at DESC
+         LIMIT ?`
+      )
+      .bind(limit)
+      .all<{
+        cache_id: string;
+        operation: string;
+        tokens_used: number;
+        cached_tokens_used: number;
+        created_at: string;
+      }>();
+
+    return (results.results ?? []).map((row) => ({
+      cacheId: row.cache_id,
+      operation: row.operation as UsageOperation,
+      tokensUsed: row.tokens_used,
+      cachedTokensUsed: row.cached_tokens_used,
+      createdAt: new Date(row.created_at),
+    }));
   }
 }
 

@@ -144,6 +144,79 @@ export interface CacheStorage {
 }
 
 // ============================================================================
+// Usage Logging
+// ============================================================================
+
+export type UsageOperation = 'load' | 'query' | 'evict';
+
+export interface UsageEntry {
+  /** Cache ID (internal, not alias) */
+  cacheId: string;
+  /** Operation type */
+  operation: UsageOperation;
+  /** Input tokens used (for queries) */
+  tokensUsed: number;
+  /** Tokens served from cache (discounted pricing) */
+  cachedTokensUsed: number;
+  /** When the operation occurred */
+  createdAt: Date;
+}
+
+export interface UsageStats {
+  /** Total operations */
+  totalOperations: number;
+  /** Total input tokens */
+  totalTokensUsed: number;
+  /** Total cached tokens */
+  totalCachedTokensUsed: number;
+  /** Estimated cost in USD */
+  estimatedCost: number;
+  /** Breakdown by operation */
+  byOperation: Record<UsageOperation, { count: number; tokensUsed: number; cachedTokensUsed: number }>;
+}
+
+export interface UsageLogger {
+  /** Log a usage event */
+  log(entry: Omit<UsageEntry, 'createdAt'>): Promise<void>;
+  /** Get usage stats for a cache */
+  getStats(cacheId?: string): Promise<UsageStats>;
+  /** Get recent usage entries */
+  getRecent(limit?: number): Promise<UsageEntry[]>;
+}
+
+// Gemini pricing (as of 2024) - per 1M tokens
+export const GEMINI_PRICING = {
+  // gemini-2.0-flash
+  'gemini-2.0-flash-001': {
+    input: 0.10,        // $0.10 per 1M input tokens
+    cachedInput: 0.025, // $0.025 per 1M cached tokens (75% discount)
+    output: 0.40,       // $0.40 per 1M output tokens
+  },
+  // Default fallback
+  default: {
+    input: 0.10,
+    cachedInput: 0.025,
+    output: 0.40,
+  },
+} as const;
+
+/**
+ * Calculate estimated cost from token usage
+ */
+export function calculateCost(
+  tokensUsed: number,
+  cachedTokensUsed: number,
+  model = 'default'
+): number {
+  const pricing = GEMINI_PRICING[model as keyof typeof GEMINI_PRICING] ?? GEMINI_PRICING.default;
+  const regularTokens = tokensUsed - cachedTokensUsed;
+  const cost =
+    (regularTokens / 1_000_000) * pricing.input +
+    (cachedTokensUsed / 1_000_000) * pricing.cachedInput;
+  return Math.round(cost * 1_000_000) / 1_000_000; // Round to 6 decimals
+}
+
+// ============================================================================
 // Error Types
 // ============================================================================
 

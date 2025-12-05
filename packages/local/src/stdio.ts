@@ -1,6 +1,10 @@
-import { Hono } from 'hono';
-import { cors } from 'hono/cors';
-import { logger } from 'hono/logger';
+#!/usr/bin/env bun
+
+/**
+ * Mnemo MCP Stdio Transport
+ * Enables Claude Desktop integration via stdin/stdout
+ */
+
 import { Database } from 'bun:sqlite';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -17,80 +21,17 @@ import {
   MnemoConfigSchema,
   calculateCost,
 } from '@mnemo/core';
-import { MnemoMCPServer, toolDefinitions } from '@mnemo/mcp-server';
+import { MnemoMCPServer } from '@mnemo/mcp-server';
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
-const PORT = parseInt(process.env.MNEMO_PORT ?? '8080');
 const MNEMO_DIR = process.env.MNEMO_DIR ?? join(homedir(), '.mnemo');
 const DB_PATH = join(MNEMO_DIR, 'mnemo.db');
 
 // ============================================================================
-// Initialization
-// ============================================================================
-
-async function init() {
-  // Ensure directory exists
-  await mkdir(MNEMO_DIR, { recursive: true });
-
-  // Check for API key
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.error('Error: GEMINI_API_KEY environment variable is required');
-    console.error('Get one at: https://aistudio.google.com/app/apikey');
-    process.exit(1);
-  }
-
-  // Initialize database
-  const db = new Database(DB_PATH);
-  initDatabase(db);
-
-  // Create services
-  const config = MnemoConfigSchema.parse({ geminiApiKey: apiKey });
-  const geminiClient = new GeminiClient(config);
-  const storage = new SQLiteCacheStorage(db);
-  const usageLogger = new SQLiteUsageLogger(db);
-  const mcpServer = new MnemoMCPServer({ geminiClient, storage, usageLogger });
-
-  return { db, mcpServer, storage, usageLogger };
-}
-
-function initDatabase(db: Database) {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS caches (
-      id TEXT PRIMARY KEY,
-      alias TEXT UNIQUE NOT NULL,
-      gemini_cache_name TEXT NOT NULL,
-      source TEXT NOT NULL,
-      token_count INTEGER DEFAULT 0,
-      model TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      expires_at TEXT NOT NULL
-    )
-  `);
-
-  db.run(`CREATE INDEX IF NOT EXISTS idx_caches_alias ON caches(alias)`);
-
-  // Usage logs table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS usage_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      cache_id TEXT,
-      operation TEXT NOT NULL,
-      tokens_used INTEGER DEFAULT 0,
-      cached_tokens_used INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  db.run(`CREATE INDEX IF NOT EXISTS idx_usage_cache ON usage_logs(cache_id)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_logs(created_at)`);
-}
-
-// ============================================================================
-// SQLite Storage Implementation
+// SQLite Storage (same as index.ts)
 // ============================================================================
 
 class SQLiteCacheStorage implements CacheStorage {
@@ -216,6 +157,42 @@ class SQLiteCacheStorage implements CacheStorage {
 }
 
 // ============================================================================
+// Initialization
+// ============================================================================
+
+function initDatabase(db: Database) {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS caches (
+      id TEXT PRIMARY KEY,
+      alias TEXT UNIQUE NOT NULL,
+      gemini_cache_name TEXT NOT NULL,
+      source TEXT NOT NULL,
+      token_count INTEGER DEFAULT 0,
+      model TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      expires_at TEXT NOT NULL
+    )
+  `);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_caches_alias ON caches(alias)`);
+
+  // Usage logs table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS usage_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cache_id TEXT,
+      operation TEXT NOT NULL,
+      tokens_used INTEGER DEFAULT 0,
+      cached_tokens_used INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_usage_cache ON usage_logs(cache_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_logs(created_at)`);
+}
+
+// ============================================================================
 // SQLite Usage Logger Implementation
 // ============================================================================
 
@@ -234,7 +211,6 @@ class SQLiteUsageLogger implements UsageLogger {
     const whereClause = cacheId ? 'WHERE cache_id = ?' : '';
     const params = cacheId ? [cacheId] : [];
 
-    // Get totals
     const totals = this.db
       .query(
         `SELECT
@@ -245,7 +221,6 @@ class SQLiteUsageLogger implements UsageLogger {
       )
       .get(...params) as { total_ops: number; total_tokens: number; total_cached: number };
 
-    // Get breakdown by operation
     const byOpRows = this.db
       .query(
         `SELECT
@@ -315,113 +290,100 @@ class SQLiteUsageLogger implements UsageLogger {
   }
 }
 
+async function init() {
+  // Ensure directory exists
+  await mkdir(MNEMO_DIR, { recursive: true });
+
+  // Check for API key
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.error('Error: GEMINI_API_KEY environment variable is required');
+    process.exit(1);
+  }
+
+  // Initialize database
+  const db = new Database(DB_PATH);
+  initDatabase(db);
+
+  // Create services
+  const config = MnemoConfigSchema.parse({ geminiApiKey: apiKey });
+  const geminiClient = new GeminiClient(config);
+  const storage = new SQLiteCacheStorage(db);
+  const usageLogger = new SQLiteUsageLogger(db);
+  const mcpServer = new MnemoMCPServer({ geminiClient, storage, usageLogger });
+
+  return { db, mcpServer };
+}
+
 // ============================================================================
-// Server
+// Stdio Transport
 // ============================================================================
 
-async function main() {
-  const { mcpServer } = await init();
+async function runStdioTransport(mcpServer: MnemoMCPServer) {
+  const decoder = new TextDecoder();
+  let buffer = '';
 
-  const app = new Hono();
+  // Log to stderr (stdout is for MCP protocol only)
+  const log = (msg: string) => {
+    if (process.env.MNEMO_DEBUG) {
+      console.error(`[mnemo] ${msg}`);
+    }
+  };
 
-  // Middleware
-  app.use('*', cors());
-  app.use('*', logger());
+  log('Stdio transport started');
 
-  // Health check
-  app.get('/health', (c) => {
-    return c.json({
-      status: 'ok',
-      service: 'mnemo-local',
-      version: '0.1.0',
-    });
-  });
+  // Read from stdin
+  for await (const chunk of Bun.stdin.stream()) {
+    buffer += decoder.decode(chunk);
 
-  // Service info
-  app.get('/', (c) => {
-    return c.json({
-      name: 'mnemo',
-      version: '0.1.0',
-      description: 'Extended memory for AI assistants via Gemini context caching',
-      mode: 'local',
-      endpoints: {
-        health: 'GET /health',
-        tools: 'GET /tools',
-        mcp: 'POST /mcp',
-      },
-    });
-  });
+    // Process complete lines
+    let newlineIndex: number;
+    while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
 
-  // List available tools
-  app.get('/tools', (c) => {
-    return c.json({ tools: toolDefinitions });
-  });
+      if (!line) continue;
 
-  // MCP protocol endpoint
-  app.post('/mcp', async (c) => {
-    try {
-      const request = await c.req.json();
-      const response = await mcpServer.handleRequest(request);
-      return c.json(response);
-    } catch (error) {
-      return c.json(
-        {
+      log(`Received: ${line.slice(0, 100)}...`);
+
+      try {
+        const request = JSON.parse(line);
+        const response = await mcpServer.handleRequest(request);
+        const responseStr = JSON.stringify(response);
+
+        log(`Sending: ${responseStr.slice(0, 100)}...`);
+
+        // Write response to stdout
+        process.stdout.write(responseStr + '\n');
+      } catch (error) {
+        // Send parse error
+        const errorResponse = {
           jsonrpc: '2.0',
           id: null,
           error: {
             code: -32700,
             message: 'Parse error',
+            data: error instanceof Error ? error.message : 'Unknown error',
           },
-        },
-        400
-      );
-    }
-  });
-
-  // Direct tool invocation
-  app.post('/tools/:toolName', async (c) => {
-    const toolName = c.req.param('toolName');
-    try {
-      const args = await c.req.json();
-      const response = await mcpServer.handleRequest({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: {
-          name: toolName,
-          arguments: args,
-        },
-      });
-
-      if ('result' in response && response.result) {
-        return c.json(response.result);
+        };
+        process.stdout.write(JSON.stringify(errorResponse) + '\n');
       }
-      if ('error' in response && response.error) {
-        return c.json({ error: response.error.message }, 400);
-      }
-      return c.json(response);
-    } catch {
-      return c.json({ error: 'Invalid request' }, 400);
     }
-  });
+  }
 
-  console.log(`
-╔══════════════════════════════════════════════════════════╗
-║                      🧠 Mnemo                             ║
-║           Extended memory for AI assistants              ║
-╠══════════════════════════════════════════════════════════╣
-║  Server running at: http://localhost:${PORT}               ║
-║  Data directory:    ${MNEMO_DIR}
-║                                                          ║
-║  MCP endpoint:      POST /mcp                            ║
-║  Tools endpoint:    GET /tools                           ║
-╚══════════════════════════════════════════════════════════╝
-`);
-
-  Bun.serve({
-    port: PORT,
-    fetch: app.fetch,
-  });
+  log('Stdio transport ended');
 }
 
-main().catch(console.error);
+// ============================================================================
+// Main
+// ============================================================================
+
+async function main() {
+  const { mcpServer } = await init();
+  await runStdioTransport(mcpServer);
+}
+
+main().catch((error) => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});

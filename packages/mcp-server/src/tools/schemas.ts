@@ -6,11 +6,16 @@ import type { MCPToolDefinition } from '../protocol';
 // ============================================================================
 
 export const contextLoadSchema = z.object({
-  source: z.string().describe('Path to local directory or file to load'),
+  source: z.string().optional().describe('Path to local directory, file, or GitHub URL to load'),
+  sources: z.array(z.string()).optional().describe('Multiple sources to load into a single cache'),
   alias: z.string().min(1).max(64).describe('Friendly name for this cache'),
   ttl: z.number().min(60).max(86400).optional().describe('Time to live in seconds (default: 3600)'),
   systemInstruction: z.string().optional().describe('System instruction for queries against this cache'),
-});
+  githubToken: z.string().optional().describe('GitHub personal access token for private repositories'),
+}).refine(
+  (data) => data.source || (data.sources && data.sources.length > 0),
+  { message: 'Either source or sources must be provided' }
+);
 
 export type ContextLoadInput = z.infer<typeof contextLoadSchema>;
 
@@ -46,13 +51,18 @@ export type ContextStatsInput = z.infer<typeof contextStatsSchema>;
 export const toolDefinitions: MCPToolDefinition[] = [
   {
     name: 'context_load',
-    description: 'Load a local directory or file into the Gemini context cache. This enables querying the content with context_query.',
+    description: 'Load sources into the Gemini context cache. Supports local directories, files, and GitHub repos (public/private). Use "sources" array to combine multiple sources into one cache.',
     inputSchema: {
       type: 'object',
       properties: {
         source: {
           type: 'string',
-          description: 'Path to local directory or file to load',
+          description: 'Single source: local path or GitHub URL (e.g., https://github.com/owner/repo)',
+        },
+        sources: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Multiple sources to combine into one cache',
         },
         alias: {
           type: 'string',
@@ -66,8 +76,12 @@ export const toolDefinitions: MCPToolDefinition[] = [
           type: 'string',
           description: 'System instruction for queries against this cache',
         },
+        githubToken: {
+          type: 'string',
+          description: 'GitHub personal access token for private repositories',
+        },
       },
-      required: ['source', 'alias'],
+      required: ['alias'],
     },
   },
   {

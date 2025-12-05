@@ -4,7 +4,8 @@
   "description": "Local Bun server for Mnemo",
   "main": "src/index.ts",
   "bin": {
-    "mnemo": "./src/cli.ts"
+    "mnemo": "./src/cli.ts",
+    "mnemo-stdio": "./src/stdio.ts"
   },
   "scripts": {
     "dev": "bun run --watch src/index.ts",

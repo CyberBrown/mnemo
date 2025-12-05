@@ -19,6 +19,22 @@ This gives you:
 
 ## Quick Start
 
+### Hosted Service
+
+Try Mnemo instantly with our hosted Cloudflare Worker:
+
+```bash
+# Load a GitHub repo
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
+  -H "Content-Type: application/json" \
+  -d '{"source": "https://github.com/owner/repo", "alias": "my-project"}'
+
+# Query it
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
+  -H "Content-Type: application/json" \
+  -d '{"alias": "my-project", "query": "What does this codebase do?"}'
+```
+
 ### Local Server (Bun)
 
 ```bash
@@ -37,10 +53,20 @@ bun run dev
 ### Usage
 
 ```bash
-# Load a codebase
+# Load a GitHub repo (public)
 curl -X POST http://localhost:8080/tools/context_load \
   -H "Content-Type: application/json" \
-  -d '{"source": "/path/to/your/repo", "alias": "my-project"}'
+  -d '{"source": "https://github.com/owner/repo", "alias": "my-project"}'
+
+# Load a private repo (with GitHub token)
+curl -X POST http://localhost:8080/tools/context_load \
+  -H "Content-Type: application/json" \
+  -d '{"source": "https://github.com/owner/private-repo", "alias": "private", "githubToken": "ghp_xxx"}'
+
+# Load multiple repos into one cache
+curl -X POST http://localhost:8080/tools/context_load \
+  -H "Content-Type: application/json" \
+  -d '{"sources": ["https://github.com/owner/repo1", "https://github.com/owner/repo2"], "alias": "combined"}'
 
 # Query it
 curl -X POST http://localhost:8080/tools/context_query \
@@ -48,7 +74,12 @@ curl -X POST http://localhost:8080/tools/context_query \
   -d '{"alias": "my-project", "query": "What does this codebase do?"}'
 
 # List caches
-curl http://localhost:8080/tools/context_list
+curl -X POST http://localhost:8080/tools/context_list \
+  -H "Content-Type: application/json" -d '{}'
+
+# Get usage stats with cost tracking
+curl -X POST http://localhost:8080/tools/context_stats \
+  -H "Content-Type: application/json" -d '{}'
 
 # Evict when done
 curl -X POST http://localhost:8080/tools/context_evict \
@@ -115,11 +146,22 @@ wrangler deploy
 
 | Tool | Description |
 |------|-------------|
-| `context_load` | Load a directory or file into Gemini cache |
-| `context_query` | Query a cached context |
-| `context_list` | List all active caches |
+| `context_load` | Load GitHub repos (public/private), local dirs, or multiple sources into Gemini cache |
+| `context_query` | Query a cached context with natural language |
+| `context_list` | List all active caches with token counts and expiry |
 | `context_evict` | Remove a cache |
-| `context_stats` | Get usage statistics |
+| `context_stats` | Get usage statistics with cost tracking |
+
+### context_load Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `source` | Single source: GitHub URL or local path |
+| `sources` | Multiple sources to combine into one cache |
+| `alias` | Friendly name for this cache |
+| `ttl` | Time to live in seconds (60-86400, default 3600) |
+| `githubToken` | GitHub token for private repos |
+| `systemInstruction` | Custom system prompt for queries |
 
 ## Configuration
 

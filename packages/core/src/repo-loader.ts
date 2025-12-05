@@ -413,12 +413,18 @@ export async function loadGitHubRepo(
   }
 }
 
+export interface GitHubLoadOptions extends Partial<LoadOptions> {
+  /** GitHub personal access token for private repos */
+  githubToken?: string;
+}
+
 /**
  * Load a GitHub repository via API (works in CF Workers - no filesystem needed)
+ * Supports private repos when a GitHub token is provided
  */
 export async function loadGitHubRepoViaAPI(
   repoUrl: string,
-  options: Partial<LoadOptions> = {}
+  options: GitHubLoadOptions = {}
 ): Promise<LoadedSource> {
   // Parse GitHub URL
   const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
@@ -436,16 +442,25 @@ export async function loadGitHubRepoViaAPI(
   // Download zipball from GitHub API
   const zipUrl = `https://api.github.com/repos/${owner}/${repoName}/zipball/${ref}`;
 
-  const response = await fetch(zipUrl, {
-    headers: {
-      'Accept': 'application/vnd.github+json',
-      'User-Agent': 'Mnemo/0.1.0',
-    },
-  });
+  const headers: Record<string, string> = {
+    'Accept': 'application/vnd.github+json',
+    'User-Agent': 'Mnemo/0.1.0',
+  };
+
+  // Add authorization header for private repos
+  if (options.githubToken) {
+    headers['Authorization'] = `Bearer ${options.githubToken}`;
+  }
+
+  const response = await fetch(zipUrl, { headers });
 
   if (!response.ok) {
     if (response.status === 404) {
-      throw new LoadError(repoUrl, `Repository not found: ${owner}/${repoName}`);
+      const hint = options.githubToken ? '' : ' (if private, provide a GitHub token)';
+      throw new LoadError(repoUrl, `Repository not found: ${owner}/${repoName}${hint}`);
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new LoadError(repoUrl, `Access denied: ${owner}/${repoName} - check your GitHub token permissions`);
     }
     throw new LoadError(repoUrl, `GitHub API error: ${response.status} ${response.statusText}`);
   }

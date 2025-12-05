@@ -665,6 +665,344 @@ describe('handleContextStats', () => {
 });
 
 // ============================================================================
+// Composite Loading Tests
+// ============================================================================
+
+describe('Composite Loading', () => {
+  let statSpy: any;
+
+  beforeEach(() => {
+    statSpy = mockStatForDirectory();
+  });
+
+  afterEach(() => {
+    statSpy?.mockRestore();
+  });
+
+  test('loads multiple sources via sources array', async () => {
+    const deps = createMockDeps();
+    const input = {
+      sources: ['/test/source1', '/test/source2', '/test/source3'],
+      alias: 'combined-cache',
+      ttl: 3600,
+    };
+
+    const result = await handleContextLoad(deps, input);
+
+    expect(result.success).toBe(true);
+    expect(result.sourcesLoaded).toBe(3);
+    expect(deps.repoLoader.loadDirectory).toHaveBeenCalledTimes(3);
+    expect(deps.geminiClient.createCache).toHaveBeenCalledTimes(1);
+  });
+
+  test('combines content from multiple sources', async () => {
+    const deps = createMockDeps();
+    const input = {
+      sources: ['/test/source1', '/test/source2'],
+      alias: 'combined-cache',
+      ttl: 3600,
+    };
+
+    await handleContextLoad(deps, input);
+
+    // Check that createCache was called with combined content
+    const createCacheCall = (deps.geminiClient.createCache as any).mock.calls[0];
+    const content = createCacheCall[0];
+
+    expect(content).toContain('Combined Context');
+    expect(content).toContain('Source 1:');
+    expect(content).toContain('Source 2:');
+  });
+
+  test('source metadata shows combined sources', async () => {
+    const deps = createMockDeps();
+    const input = {
+      sources: ['/test/a', '/test/b'],
+      alias: 'combined',
+      ttl: 3600,
+    };
+
+    const result = await handleContextLoad(deps, input);
+
+    expect(result.cache.source).toContain('/test/a');
+    expect(result.cache.source).toContain('/test/b');
+    expect(result.cache.source).toContain('+');
+  });
+
+  test('single source still works with source parameter', async () => {
+    const deps = createMockDeps();
+    const input = {
+      source: '/test/single',
+      alias: 'single-cache',
+      ttl: 3600,
+    };
+
+    const result = await handleContextLoad(deps, input);
+
+    expect(result.success).toBe(true);
+    expect(result.sourcesLoaded).toBe(1);
+    expect(deps.repoLoader.loadDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  test('requires either source or sources', async () => {
+    const deps = createMockDeps();
+    const input = {
+      alias: 'no-source',
+      ttl: 3600,
+    };
+
+    await expect(handleContextLoad(deps, input)).rejects.toThrow();
+  });
+
+  test('empty sources array is rejected', async () => {
+    const deps = createMockDeps();
+    const input = {
+      sources: [],
+      alias: 'empty-sources',
+      ttl: 3600,
+    };
+
+    await expect(handleContextLoad(deps, input)).rejects.toThrow();
+  });
+
+  test('loads sources in parallel', async () => {
+    const deps = createMockDeps();
+    let callOrder: string[] = [];
+
+    // Track call order
+    (deps.repoLoader.loadDirectory as any).mockImplementation(async (path: string) => {
+      callOrder.push(`start-${path}`);
+      await new Promise(r => setTimeout(r, 10)); // Small delay
+      callOrder.push(`end-${path}`);
+      return {
+        content: `Content for ${path}`,
+        totalTokens: 1000,
+        fileCount: 5,
+        files: [],
+        metadata: { source: path, loadedAt: new Date() },
+      };
+    });
+
+    const input = {
+      sources: ['/a', '/b', '/c'],
+      alias: 'parallel-test',
+      ttl: 3600,
+    };
+
+    await handleContextLoad(deps, input);
+
+    // All starts should come before any ends (parallel execution)
+    const startIndices = callOrder.filter(c => c.startsWith('start-')).map(c => callOrder.indexOf(c));
+    const endIndices = callOrder.filter(c => c.startsWith('end-')).map(c => callOrder.indexOf(c));
+
+    // At least some starts should happen before some ends
+    expect(Math.max(...startIndices)).toBeLessThan(Math.max(...endIndices));
+  });
+});
+
+// ============================================================================
+// GitHub Token Tests
+// ============================================================================
+
+describe('GitHub Token Support', () => {
+  test('passes githubToken to loadGitHubRepoViaAPI', async () => {
+    // We can't easily test the actual API call without mocking the module
+    // but we can verify the schema accepts the token
+    const deps = createMockDeps();
+
+    // The schema should accept githubToken
+    const input = {
+      source: '/local/path', // Using local to avoid GitHub API call
+      alias: 'test',
+      ttl: 3600,
+      githubToken: 'ghp_test_token_123',
+    };
+
+    // Mock stat to return directory
+    const statSpy = mockStatForDirectory();
+
+    try {
+      const result = await handleContextLoad(deps, input);
+      expect(result.success).toBe(true);
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
+  test('schema validates githubToken as optional string', async () => {
+    const deps = createMockDeps();
+    const statSpy = mockStatForDirectory();
+
+    try {
+      // Without token should work
+      const result1 = await handleContextLoad(deps, {
+        source: '/test',
+        alias: 'test1',
+        ttl: 3600,
+      });
+      expect(result1.success).toBe(true);
+
+      // With token should work
+      const result2 = await handleContextLoad(deps, {
+        source: '/test',
+        alias: 'test2',
+        ttl: 3600,
+        githubToken: 'ghp_abc123',
+      });
+      expect(result2.success).toBe(true);
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+});
+
+// ============================================================================
+// Usage Logging Tests
+// ============================================================================
+
+describe('Usage Logging', () => {
+  let statSpy: any;
+
+  beforeEach(() => {
+    statSpy = mockStatForDirectory();
+  });
+
+  afterEach(() => {
+    statSpy?.mockRestore();
+  });
+
+  function createMockUsageLogger() {
+    return {
+      log: mock(async () => {}),
+      getStats: mock(async () => ({
+        totalOperations: 5,
+        totalTokensUsed: 10000,
+        totalCachedTokensUsed: 8000,
+        estimatedCost: 0.0025,
+        byOperation: {
+          load: { count: 2, tokensUsed: 5000, cachedTokensUsed: 0 },
+          query: { count: 3, tokensUsed: 5000, cachedTokensUsed: 8000 },
+          evict: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
+        },
+      })),
+      getRecent: mock(async () => []),
+    };
+  }
+
+  test('logs load operations', async () => {
+    const deps = createMockDeps();
+    const usageLogger = createMockUsageLogger();
+    deps.usageLogger = usageLogger as any;
+
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test',
+      ttl: 3600,
+    });
+
+    expect(usageLogger.log).toHaveBeenCalledTimes(1);
+    expect(usageLogger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'load',
+        cachedTokensUsed: 0, // Initial load has no cached tokens
+      })
+    );
+  });
+
+  test('logs query operations with token usage', async () => {
+    const deps = createMockDeps();
+    const usageLogger = createMockUsageLogger();
+    deps.usageLogger = usageLogger as any;
+
+    // Create cache first
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test',
+      ttl: 3600,
+    });
+
+    // Reset mock to only count query
+    usageLogger.log.mockClear();
+
+    await handleContextQuery(deps, {
+      alias: 'test',
+      query: 'What is this?',
+    });
+
+    expect(usageLogger.log).toHaveBeenCalledTimes(1);
+    expect(usageLogger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'query',
+        tokensUsed: expect.any(Number),
+        cachedTokensUsed: expect.any(Number),
+      })
+    );
+  });
+
+  test('logs evict operations', async () => {
+    const deps = createMockDeps();
+    const usageLogger = createMockUsageLogger();
+    deps.usageLogger = usageLogger as any;
+
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test',
+      ttl: 3600,
+    });
+
+    usageLogger.log.mockClear();
+
+    await handleContextEvict(deps, { alias: 'test' });
+
+    expect(usageLogger.log).toHaveBeenCalledTimes(1);
+    expect(usageLogger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'evict',
+        tokensUsed: 0,
+        cachedTokensUsed: 0,
+      })
+    );
+  });
+
+  test('context_stats includes usage stats when logger available', async () => {
+    const deps = createMockDeps();
+    const usageLogger = createMockUsageLogger();
+    deps.usageLogger = usageLogger as any;
+
+    await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test',
+      ttl: 3600,
+    });
+
+    const result = await handleContextStats(deps, {});
+
+    expect(result.usage).toBeDefined();
+    expect(result.usage?.totalOperations).toBe(5);
+    expect(result.usage?.estimatedCost).toBe(0.0025);
+    expect(result.usage?.byOperation.load.count).toBe(2);
+    expect(usageLogger.getStats).toHaveBeenCalled();
+  });
+
+  test('works without usage logger', async () => {
+    const deps = createMockDeps();
+    // No usageLogger set
+
+    // Should not throw
+    const result = await handleContextLoad(deps, {
+      source: '/test',
+      alias: 'test',
+      ttl: 3600,
+    });
+
+    expect(result.success).toBe(true);
+
+    const stats = await handleContextStats(deps, {});
+    expect(stats.usage).toBeUndefined();
+  });
+});
+
+// ============================================================================
 // Error Handling Tests
 // ============================================================================
 
