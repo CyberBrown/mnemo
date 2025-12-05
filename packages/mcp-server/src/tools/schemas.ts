@@ -44,6 +44,15 @@ export const contextStatsSchema = z.object({
 
 export type ContextStatsInput = z.infer<typeof contextStatsSchema>;
 
+export const contextRefreshSchema = z.object({
+  alias: z.string().describe('Cache alias to refresh'),
+  ttl: z.number().min(60).max(86400).optional().describe('New time to live in seconds (optional, uses previous TTL if not specified)'),
+  systemInstruction: z.string().optional().describe('System instruction for queries (optional, uses previous instruction if not specified)'),
+  githubToken: z.string().optional().describe('GitHub personal access token for private repositories'),
+});
+
+export type ContextRefreshInput = z.infer<typeof contextRefreshSchema>;
+
 // ============================================================================
 // Tool Definitions (MCP format)
 // ============================================================================
@@ -145,6 +154,32 @@ export const toolDefinitions: MCPToolDefinition[] = [
         },
       },
       required: [],
+    },
+  },
+  {
+    name: 'context_refresh',
+    description: 'Refresh an existing cache by re-fetching the source content and creating a new Gemini cache. Preserves the alias and optionally updates TTL or system instruction.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        alias: {
+          type: 'string',
+          description: 'Cache alias to refresh',
+        },
+        ttl: {
+          type: 'number',
+          description: 'New time to live in seconds (60-86400, optional)',
+        },
+        systemInstruction: {
+          type: 'string',
+          description: 'System instruction for queries (optional)',
+        },
+        githubToken: {
+          type: 'string',
+          description: 'GitHub personal access token for private repositories',
+        },
+      },
+      required: ['alias'],
     },
   },
 ];

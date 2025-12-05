@@ -152,7 +152,7 @@ class SQLiteCacheStorage implements CacheStorage {
     if (sets.length === 0) return;
 
     values.push(alias);
-    this.db.run(`UPDATE caches SET ${sets.join(', ')} WHERE alias = ?`, values);
+    this.db.run(`UPDATE caches SET ${sets.join(', ')} WHERE alias = ?`, values as any);
   }
 }
 
@@ -242,6 +242,7 @@ class SQLiteUsageLogger implements UsageLogger {
       load: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
       query: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
       evict: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
+      refresh: { count: 0, tokensUsed: 0, cachedTokensUsed: 0 },
     };
 
     for (const row of byOpRows) {

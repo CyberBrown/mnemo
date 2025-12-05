@@ -10,9 +10,15 @@
     "dev": "bun run --filter=@mnemo/local dev",
     "dev:cf": "bun run --filter=@mnemo/cf-worker dev",
     "build": "bun run --filter='@mnemo/*' build",
+    "clean": "bun run --filter='@mnemo/*' clean",
     "deploy": "bun run --filter=@mnemo/cf-worker deploy",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "publish:core": "cd packages/core && npm publish",
+    "publish:mcp-server": "cd packages/mcp-server && npm publish",
+    "publish:local": "cd packages/local && npm publish",
+    "publish:all": "bun run build && bun run publish:core && bun run publish:mcp-server && bun run publish:local",
+    "version": "bun run --filter='@mnemo/*' version"
   },
   "devDependencies": {
     "@types/bun": "latest",

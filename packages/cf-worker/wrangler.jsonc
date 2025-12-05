@@ -28,8 +28,10 @@
   },
   
   // Secrets (set via wrangler secret put)
-  // GEMINI_API_KEY
-  // MNEMO_AUTH_TOKEN (optional)
+  // GEMINI_API_KEY - Required for Gemini API access
+  // MNEMO_AUTH_TOKEN - Optional Bearer token for authentication
+  //                    If not set, endpoints are publicly accessible
+  //                    If set, /mcp and /tools/:toolName require auth
   
   // Development settings
   "dev": {
