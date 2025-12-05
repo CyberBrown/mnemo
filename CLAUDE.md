@@ -99,6 +99,10 @@ mcp__developer-guides__list_guides
 - `RepoLoader` - Load local/remote repos into text format
 - `SourceLoader` - Load markdown files, PDFs, etc.
 - `TokenCounter` - Estimate tokens before loading
+- `Adapters` (v0.2+) - Extensible source adapter system
+  - `SourceAdapter` - Base interface for source adapters
+  - `DocsCrawlerAdapter` - Crawl documentation websites
+  - `AdapterRegistry` - Registry for managing adapters
 - Types and interfaces shared across packages
 
 ### @mnemo/mcp-server
@@ -110,6 +114,8 @@ mcp__developer-guides__list_guides
 ### @mnemo/cf-worker
 - Cloudflare Workers entry point
 - Hono routes for `/mcp`, `/health`, `/tools`
+- Authentication middleware (Bearer token via MNEMO_AUTH_TOKEN)
+- Rate limiting middleware (30 req/min per IP, in-memory)
 - D1 for cache metadata persistence
 - R2 for optional file staging
 - Wrangler configuration
@@ -205,10 +211,25 @@ curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
 
 ## Roadmap
 
+### v0.1 - Complete ✅
 - [x] MCP stdio transport for Claude Desktop integration (see `docs/claude-desktop-setup.md`)
 - [x] Wire up usage_logs table (cost tracking with Gemini pricing)
 - [x] Composite loading (multiple sources into one cache via `sources` array)
 - [x] Private repo support (GitHub token via `githubToken` parameter)
+- [x] Authentication middleware (Bearer token)
+- [x] Rate limiting (30 req/min per IP)
+- [x] PDF and Markdown support
+- [x] Cache refresh functionality
+
+### v0.2 - Source Adapters (In Progress)
+- [x] Extensible source adapter interface
+- [x] Documentation site crawler
+- [ ] Notion API integration
+- [ ] Slack export
+- [ ] Google Drive
+- [ ] Obsidian vault
+- [ ] Meeting transcripts
+- [ ] Email exports
 
 ## References
 

@@ -119,7 +119,7 @@ export const LoadedSourceSchema = z.object({
     originalSource: z.string().optional(),
     /** Owner/repo if cloned from GitHub */
     clonedFrom: z.string().optional(),
-  }),
+  }).passthrough(), // Allow additional properties for adapters
 });
 
 export type LoadedSource = z.infer<typeof LoadedSourceSchema>;
