@@ -1,33 +1,144 @@
 # Mnemo Roadmap
 
-## Current: v0.1 - Static Context Cache
+## Vision: Digital Executive (DE) Architecture
+
+Mnemo is evolving from a static context cache into an autonomous agent system that processes information from multiple sources, makes decisions automatically, and only escalates what needs human attention.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                           DATA SOURCES                               │
+│   Email  Texts  Calendar  Files  Zoom  Bank  Repos  Docs  etc       │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    DE: TIER 1 — TRIAGE (Fast/Cheap)                  │
+│                                                                      │
+│   • Rules-based classification                                       │
+│   • Pattern matching                                                 │
+│   • Light ML (spam detection, sender recognition)                    │
+│                                                                      │
+│   ACTIONS:                          ESCALATE TO TIER 2:              │
+│   • Marketing → Unsubscribe         • Invoices                       │
+│   • Newsletter → FYI folder         • Known important senders        │
+│   • Obvious spam → Delete           • Anomalies                      │
+│   • Receipts → File                 • Requires decision              │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                  DE: TIER 2 — ANALYSIS (LLM-powered)                 │
+│                                                                      │
+│   • Deeper semantic understanding                                    │
+│   • Context from Mnemo (past interactions, patterns)                 │
+│   • Decision-making with reasoning                                   │
+│                                                                      │
+│   OUTCOMES:                                                          │
+│   ┌─────────────────┬─────────────────┬─────────────────────────┐   │
+│   │ AUTO-EXECUTE    │ NOTIFY USER     │ NEEDS ATTENTION         │   │
+│   ├─────────────────┼─────────────────┼─────────────────────────┤   │
+│   │ Gas bill normal │ Hourly recap:   │ Priority 3:             │   │
+│   │ → Schedule pay  │ "Added lunch    │ "Solamp past due        │   │
+│   │                 │  to calendar"   │  - needs your input"    │   │
+│   │ Recipe from mom │                 │                         │   │
+│   │ → Save for EOD  │ Daily recap:    │ Priority 1:             │   │
+│   │   recap         │ "Mom sent       │ [Reserved for urgent]   │   │
+│   │                 │  recipe"        │                         │   │
+│   └─────────────────┴─────────────────┴─────────────────────────┘   │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         THE BRIDGE (UI)                              │
+│                                                                      │
+│   • Real-time alerts (Priority 1-3)                                  │
+│   • Hourly recaps                                                    │
+│   • Daily summaries                                                  │
+│   • "Here's what I handled for you"                                  │
+│   • Intervention controls when needed                                │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Current: v0.1 - Static Context Cache ✅
 Manual load/query/evict of repo and document sources via MCP tools.
 
 ---
 
-## v0.2 - Source Adapters
+## v0.2 - Source Adapters (Partially Complete)
 
-Extensible loader architecture for diverse context sources:
+**Status:**
+- ✅ Extensible adapter interface (`SourceAdapter`, `AdapterRegistry`)
+- ✅ Documentation site crawler (`DocsCrawlerAdapter`)
+- ✅ Git repositories (via `RepoLoader`)
 
-```
-sources/
-  repo.ts        # ✓ Git repositories
-  docs.ts        # Doc site crawler (Cloudflare docs, MDN, etc)
-  notion.ts      # Notion API workspace export
-  slack.ts       # Slack channel/thread export
-  gdrive.ts      # Google Drive folder
-  obsidian.ts    # Obsidian vault
-  transcript.ts  # Meeting transcripts (Otter, Fireflies)
-  email.ts       # Gmail/email thread exports
-```
+### 🧊 Backburner (Not Priority)
+- Notion API workspace export
+- Slack export (replaced by Zoom integration)
+- Obsidian vault
+- Meeting transcripts (Otter, Fireflies - Zoom handles this)
 
-Composite loading - multiple sources into single cache:
+### 🎯 Major Integration Branches
+
+Each integration is a **major development branch** requiring:
+- OAuth/API authentication flow
+- Multi-account support
+- Service-specific adapters
+- Comprehensive service review before implementation
+
+#### **Branch: Google Integration**
+**Scope:** All Google Workspace services
+- Gmail (multi-account, per-provider email loading)
+- Google Drive (folders, files, shared drives)
+- Google Calendar (events, schedules)
+- Google Contacts
+- [Review all Google services before implementing]
+
+**Requirements:**
+- OAuth 2.0 flow for Google
+- Support multiple Google accounts per user
+- Incremental loading (don't reload everything on each sync)
+- Real-time sync via webhooks/push notifications where possible
+
+#### **Branch: Microsoft Integration**
+**Scope:** All Microsoft 365 services
+- Outlook/Exchange (multi-account email)
+- OneDrive (file storage)
+- Outlook Calendar
+- Outlook Contacts
+- Xbox (if applicable)
+- [Review all Microsoft services before implementing]
+
+**Requirements:**
+- OAuth 2.0 flow for Microsoft
+- Support multiple Microsoft accounts per user
+- Handle enterprise/personal account differences
+- Real-time sync where possible
+
+#### **Branch: Zoom Integration**
+**Scope:** Primary team communication platform
+- Zoom Team Chat (replaces Slack)
+- Meeting recordings
+- Transcriptions
+- Cloud recordings
+- Phone system integration (via Telnyx)
+- [Review all Zoom Workplace services]
+
+**Requirements:**
+- Zoom OAuth/JWT app authentication
+- Telnyx API integration for phone transcriptions
+- Real-time message sync
+- Meeting metadata and transcription indexing
+
+### Composite Loading
+Already implemented - multiple sources into single cache:
 ```typescript
 context_load({
   sources: [
     { type: "repo", path: "./my-project" },
     { type: "docs", url: "https://docs.example.com" },
-    { type: "slack", channel: "project-x" }
+    { type: "gmail", accountId: "user@example.com" }
   ],
   alias: "full-project-context"
 })

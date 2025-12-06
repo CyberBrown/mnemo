@@ -4,9 +4,61 @@
 
 ## Project Overview
 
-Mnemo is an MCP server that provides extended context/memory for AI assistants by leveraging Gemini's large context window (1M tokens) and context caching features.
+Mnemo is an MCP server that provides **short-term working memory** for AI assistants and autonomous systems by leveraging Gemini's large context window (1M tokens) and context caching features.
 
-**Core concept:** Instead of RAG with embeddings, we load entire codebases/documents into Gemini's context cache, then query it. Claude orchestrates, Gemini holds the context.
+**Core concept:** Instead of RAG with embeddings, we load entire codebases/documents into Gemini's context cache, then query it. Mnemo serves as the memory layer for DE (Distributed Elections) and other services.
+
+## Glossary
+
+| Term | Full Name | Description |
+|------|-----------|-------------|
+| **DE** | Distributed Elections | Queue and priority system for managing LLM requests across multiple apps; routes requests to optimal models |
+| **Mnemo** | - | Short-term working memory component; provides context caching for DE and other services |
+| **Nexus** | - | Backend service for individual communication/time management (email, calendar, tasks, strategy) |
+| **Bridge** | - | Frontend UI for accessing Nexus and other services |
+| **MCP** | Model Context Protocol | Protocol for AI assistant context management |
+
+## Mnemo's Role in the Ecosystem
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Applications Layer                       │
+│   Nexus    │    Bridge    │  Claude Code  │   Other Apps    │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  DE (Distributed Elections)                  │
+│              Request Router & Priority Queue                 │
+│         • Manages LLM request limits across apps             │
+│         • Routes to optimal model (DeepSeek, Gemini, Claude) │
+│         • Handles tier-based processing (Tier 1/2)           │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                         MNEMO                                │
+│                  Short-Term Working Memory                   │
+│   • Provides huge context window (1M tokens via Gemini)     │
+│   • Caches stage management and logging for agent chains    │
+│   • Enables fast queries for active processing              │
+│   • Used by DE Tier 2 for semantic analysis                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Integration Points:**
+
+1. **DE → Mnemo**: Tier 2 analysis queries Mnemo for past interactions, patterns, and context
+2. **Nexus → Mnemo**: Loads email threads, calendar events, task history into working memory
+3. **Claude Code → Mnemo**: Operates independently (local), but can query Mnemo via MCP for project context
+4. **Bridge → Mnemo**: May access via MCP for displaying cached context status
+
+**Mnemo's Responsibilities:**
+- Load context from diverse sources (repos, docs, emails, etc.)
+- Maintain short-term cache with TTL
+- Provide fast query interface
+- Track token usage and costs
+- **NOT responsible for**: Long-term storage, decision-making, UI rendering
 
 ## Architecture
 
@@ -39,8 +91,77 @@ Mnemo is an MCP server that provides extended context/memory for AI assistants b
 | Gemini SDK | @google/genai |
 | Validation | Zod |
 | Deployment | Cloudflare Workers (primary), Local Bun (secondary) |
-| Database | D1 (CF), SQLite (local) |
+| Database | D1 (CF), SQLite (local) - **Default for all storage** |
 | Storage | R2 (optional file staging) |
+| Auth | `workers-oauth-provider` (OAuth 2.1 with PKCE) |
+
+## Infrastructure Patterns
+
+### Database Strategy
+
+**Default: D1 for all storage**
+
+Use D1 unless you have a **documented reason** not to. Before choosing an alternative, create a pros/cons analysis documenting why D1 is insufficient.
+
+**When D1 is appropriate** (most cases):
+- Application data (cache metadata, usage logs)
+- Multi-tenant architectures
+- Read-heavy workloads (with read replication)
+- Session management
+
+**Consider alternatives when**:
+- Need for real-time updates across instances (use Durable Objects)
+- Temporary data with TTL (use KV with expiration)
+- Large binary files (use R2)
+
+**Performance notes**:
+- Use parameterized queries (security + performance)
+- Enable read replication for reduced latency
+- Consider KV as cache layer for hot paths
+
+### Cloudflare Workers Limits
+
+**CPU Time**:
+- Default: 30 seconds
+- Maximum: 5 minutes (configurable via `cpu_ms` in wrangler.toml)
+- CPU time = actual compute time (waiting for subrequests doesn't count)
+
+**Implications for Mnemo**:
+- ✅ Perfect for: Request routing, rate limiting, cache orchestration, token counting
+- ⚠️ Delegate to Gemini: Large model inference (too CPU-intensive)
+- ✅ Consider Durable Objects for: Webhook retries, real-time sync, WebSocket connections
+
+**Configuration example**:
+```toml
+# wrangler.toml
+cpu_ms = 300000  # 5-minute CPU limit
+```
+
+### Authentication Patterns
+
+**Use `workers-oauth-provider` library** for OAuth 2.1 flows:
+- Google/GitHub OAuth
+- PKCE automatically handled
+- Multi-account support built-in
+- Token storage managed by provider
+
+**Storage**:
+- OAuth tokens: D1 (via provider library)
+- Session data: KV or D1 (depends on access patterns)
+- User metadata: D1
+
+### Real-Time & Webhooks
+
+**Use Durable Objects when you need**:
+- Webhook delivery with retries (use Alarms for scheduling)
+- WebSocket connections
+- Stateful processing
+- Guaranteed execution
+
+**Use Workers when you need**:
+- Stateless request handling
+- Fast ephemeral processing
+- Cost-sensitive endpoints
 
 ## Developer Guidelines (MCP Server)
 
