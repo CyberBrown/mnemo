@@ -4,7 +4,15 @@
   "main": "src/index.ts",
   "compatibility_date": "2024-12-01",
   "compatibility_flags": ["nodejs_compat"],
-  
+
+  // Custom domain (requires logosflux.io zone in Cloudflare)
+  "routes": [
+    { "pattern": "mnemo.logosflux.io", "custom_domain": true }
+  ],
+
+  // Keep workers.dev subdomain active as backup
+  "workers_dev": true,
+
   // D1 Database for cache metadata
   "d1_databases": [
     {

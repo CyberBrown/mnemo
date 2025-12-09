@@ -13,6 +13,8 @@ import {
   isGitHubUrl,
   loadGitHubRepoViaAPI,
   calculateCost,
+  UrlAdapter,
+  isGenericUrl,
 } from '@mnemo/core';
 import {
   contextLoadSchema,
@@ -33,23 +35,32 @@ export interface ToolHandlerDeps {
   storage: CacheStorage;
   repoLoader: RepoLoader;
   sourceLoader: SourceLoader;
+  urlAdapter?: UrlAdapter;
   usageLogger?: UsageLogger;
 }
 
 /**
  * Load a single source (helper for composite loading)
+ * Supports: GitHub repos, generic URLs (via UrlAdapter), local files/directories
  */
 async function loadSingleSource(
   source: string,
   deps: ToolHandlerDeps,
   githubToken?: string
 ): Promise<LoadedSource> {
-  const { repoLoader, sourceLoader } = deps;
+  const { repoLoader, sourceLoader, urlAdapter } = deps;
 
   if (isGitHubUrl(source)) {
     return loadGitHubRepoViaAPI(source, { githubToken });
+  } else if (isGenericUrl(source)) {
+    // Use URL adapter for non-GitHub URLs
+    if (!urlAdapter) {
+      throw new Error('URL adapter not configured. Cannot load generic URLs.');
+    }
+    return urlAdapter.load({ type: 'url', url: source });
   } else if (isUrl(source)) {
-    throw new Error('Only GitHub URLs are currently supported for remote loading');
+    // Fallback for other URL types (shouldn't normally hit this)
+    throw new Error('Only GitHub URLs and HTTP/HTTPS URLs are supported for remote loading');
   } else {
     const stats = await stat(source);
     if (stats.isDirectory()) {

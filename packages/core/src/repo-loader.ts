@@ -339,10 +339,20 @@ export function isUrl(source: string): boolean {
 }
 
 /**
- * Check if a string is a GitHub URL
+ * Check if a string is a GitHub repository URL
+ * Only matches github.com repo URLs (not api.github.com or raw.githubusercontent.com)
  */
 export function isGitHubUrl(source: string): boolean {
-  return /^https?:\/\/(www\.)?github\.com\//.test(source);
+  try {
+    const url = new URL(source);
+    // Only match github.com repo URLs with at least owner/repo in the path
+    return (
+      (url.hostname === 'github.com' || url.hostname === 'www.github.com') &&
+      /^\/[^/]+\/[^/]+/.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**

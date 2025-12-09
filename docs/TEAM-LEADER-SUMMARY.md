@@ -254,7 +254,7 @@ async function queryProject(question: string) {
 - Authentication (Bearer token)
 - Rate limiting (30 req/min per IP)
 - Usage tracking with cost estimation
-- Cloudflare Workers deployment (production: https://mnemo.solamp.workers.dev)
+- Cloudflare Workers deployment (production: https://mnemo.logosflux.io)
 - D1 database for cache metadata
 - 220 passing tests
 
@@ -326,7 +326,7 @@ async function queryProject(question: string) {
 
 ### API Endpoints
 
-**Production**: `https://mnemo.solamp.workers.dev`
+**Production**: `https://mnemo.logosflux.io`
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
@@ -453,7 +453,7 @@ npm install @modelcontextprotocol/sdk
 import { MCPClient } from '@modelcontextprotocol/sdk';
 
 const client = new MCPClient({
-  endpoint: 'https://mnemo.solamp.workers.dev/mcp',
+  endpoint: 'https://mnemo.logosflux.io/mcp',
   auth: { bearer: process.env.MNEMO_AUTH_TOKEN }
 });
 
@@ -479,7 +479,7 @@ console.log(queryResult.response);
 
 ```bash
 # Load
-curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
+curl -X POST https://mnemo.logosflux.io/tools/context_load \
   -H "Authorization: Bearer $MNEMO_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -488,7 +488,7 @@ curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
   }'
 
 # Query
-curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
+curl -X POST https://mnemo.logosflux.io/tools/context_query \
   -H "Authorization: Bearer $MNEMO_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -502,7 +502,7 @@ curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
 ## Resources
 
 - **Repository**: `/home/chris/mnemo`
-- **Production**: https://mnemo.solamp.workers.dev
+- **Production**: https://mnemo.logosflux.io
 - **Documentation**:
   - `/home/chris/mnemo/CLAUDE.md` (project instructions)
   - `/home/chris/mnemo/ROADMAP.md` (vision and roadmap)

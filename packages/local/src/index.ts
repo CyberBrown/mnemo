@@ -406,18 +406,42 @@ async function main() {
     }
   });
 
-  console.log(`
-╔══════════════════════════════════════════════════════════╗
-║                      🧠 Mnemo                             ║
-║           Extended memory for AI assistants              ║
-╠══════════════════════════════════════════════════════════╣
-║  Server running at: http://localhost:${PORT}               ║
-║  Data directory:    ${MNEMO_DIR}
-║                                                          ║
-║  MCP endpoint:      POST /mcp                            ║
-║  Tools endpoint:    GET /tools                           ║
-╚══════════════════════════════════════════════════════════╝
-`);
+  // Logos Flux Banner with Mnemo branding
+  const BRIGHT_MAGENTA = '\x1b[95m';
+  const MAGENTA = '\x1b[35m';
+  const CYAN = '\x1b[36m';
+  const BRIGHT_CYAN = '\x1b[96m';
+  const DIM = '\x1b[2m';
+  const RESET = '\x1b[0m';
+
+  console.log('');
+  console.log(`${BRIGHT_MAGENTA}        ██╗      ██████╗  ██████╗  ██████╗ ███████╗${RESET}`);
+  console.log(`${BRIGHT_MAGENTA}        ██║     ██╔═══██╗██╔════╝ ██╔═══██╗██╔════╝${RESET}`);
+  console.log(`${MAGENTA}        ██║     ██║   ██║██║  ███╗██║   ██║███████╗${RESET}`);
+  console.log(`${MAGENTA}        ██║     ██║   ██║██║   ██║██║   ██║╚════██║${RESET}`);
+  console.log(`${MAGENTA}        ███████╗╚██████╔╝╚██████╔╝╚██████╔╝███████║${RESET}`);
+  console.log(`${MAGENTA}        ╚══════╝ ╚═════╝  ╚═════╝  ╚═════╝ ╚══════╝${RESET}`);
+  console.log('');
+  console.log(`${BRIGHT_CYAN}                ███████╗██╗     ██╗   ██╗██╗  ██╗${RESET}`);
+  console.log(`${BRIGHT_CYAN}                ██╔════╝██║     ██║   ██║╚██╗██╔╝${RESET}`);
+  console.log(`${CYAN}                █████╗  ██║     ██║   ██║ ╚███╔╝ ${RESET}`);
+  console.log(`${CYAN}                ██╔══╝  ██║     ██║   ██║ ██╔██╗ ${RESET}`);
+  console.log(`${CYAN}                ██║     ███████╗╚██████╔╝██╔╝ ██╗${RESET}`);
+  console.log(`${CYAN}                ╚═╝     ╚══════╝ ╚═════╝ ╚═╝  ╚═╝${RESET}`);
+  console.log('');
+  console.log(`${DIM}                           Φ⥁○⧖∵${RESET}`);
+  console.log('');
+  console.log(`${DIM}                    ⚡ Mnemo v0.2.0 ⚡${RESET}`);
+  console.log('');
+  console.log(`${DIM}╔══════════════════════════════════════════════════════════╗${RESET}`);
+  console.log(`${DIM}║${RESET}  ${BRIGHT_CYAN}Extended memory for AI assistants${RESET}                      ${DIM}║${RESET}`);
+  console.log(`${DIM}╠══════════════════════════════════════════════════════════╣${RESET}`);
+  console.log(`${DIM}║${RESET}  Server:    ${BRIGHT_MAGENTA}http://localhost:${PORT}${RESET}                        ${DIM}║${RESET}`);
+  console.log(`${DIM}║${RESET}  Data:      ${CYAN}${MNEMO_DIR}${RESET}`);
+  console.log(`${DIM}║${RESET}  MCP:       ${CYAN}POST /mcp${RESET}                                   ${DIM}║${RESET}`);
+  console.log(`${DIM}║${RESET}  Tools:     ${CYAN}GET /tools${RESET}                                  ${DIM}║${RESET}`);
+  console.log(`${DIM}╚══════════════════════════════════════════════════════════╝${RESET}`);
+  console.log('');
 
   Bun.serve({
     port: PORT,

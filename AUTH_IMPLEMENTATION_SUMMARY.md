@@ -140,7 +140,7 @@ bunx wrangler deploy
 
 ```bash
 # Load a GitHub repo
-curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
+curl -X POST https://mnemo.logosflux.io/tools/context_load \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN_HERE" \
   -d '{
@@ -149,7 +149,7 @@ curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
   }'
 
 # Query the cached context
-curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
+curl -X POST https://mnemo.logosflux.io/tools/context_query \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN_HERE" \
   -d '{
@@ -162,10 +162,10 @@ curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
 
 ```bash
 # Health check - always public
-curl https://mnemo.solamp.workers.dev/health
+curl https://mnemo.logosflux.io/health
 
 # List tools - always public
-curl https://mnemo.solamp.workers.dev/tools
+curl https://mnemo.logosflux.io/tools
 ```
 
 ## Testing
@@ -184,18 +184,18 @@ curl https://mnemo.solamp.workers.dev/tools
 
 ```bash
 # Test without auth (should fail if token is set)
-curl -X POST https://mnemo.solamp.workers.dev/tools/context_list \
+curl -X POST https://mnemo.logosflux.io/tools/context_list \
   -H "Content-Type: application/json" \
   -d '{}'
 
 # Test with invalid token (should fail)
-curl -X POST https://mnemo.solamp.workers.dev/tools/context_list \
+curl -X POST https://mnemo.logosflux.io/tools/context_list \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer invalid-token" \
   -d '{}'
 
 # Test with valid token (should succeed)
-curl -X POST https://mnemo.solamp.workers.dev/tools/context_list \
+curl -X POST https://mnemo.logosflux.io/tools/context_list \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_ACTUAL_TOKEN" \
   -d '{}'

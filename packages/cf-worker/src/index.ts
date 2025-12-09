@@ -12,6 +12,7 @@ import {
   type UsageOperation,
   MnemoConfigSchema,
   calculateCost,
+  UrlAdapter,
 } from '@mnemo/core';
 import { MnemoMCPServer, toolDefinitions } from '@mnemo/mcp-server';
 
@@ -208,11 +209,14 @@ function createMCPServer(env: Env): MnemoMCPServer {
   const geminiClient = new GeminiClient(config);
   const storage = new D1CacheStorage(env.DB);
   const usageLogger = new D1UsageLogger(env.DB);
+  // Workers have a 50 subrequest limit, use 40 to leave headroom
+  const urlAdapter = new UrlAdapter({ maxSubrequests: 40 });
 
   return new MnemoMCPServer({
     geminiClient,
     storage,
     usageLogger,
+    urlAdapter,
   });
 }
 

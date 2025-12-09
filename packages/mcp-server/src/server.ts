@@ -2,6 +2,7 @@ import {
   GeminiClient,
   RepoLoader,
   SourceLoader,
+  UrlAdapter,
   type CacheStorage,
   type UsageLogger,
   MnemoError,
@@ -31,6 +32,7 @@ export interface MnemoMCPServerConfig {
   storage: CacheStorage;
   repoLoader?: RepoLoader;
   sourceLoader?: SourceLoader;
+  urlAdapter?: UrlAdapter;
   usageLogger?: UsageLogger;
 }
 
@@ -47,6 +49,7 @@ export class MnemoMCPServer {
       storage: config.storage,
       repoLoader: config.repoLoader ?? new RepoLoader(),
       sourceLoader: config.sourceLoader ?? new SourceLoader(),
+      urlAdapter: config.urlAdapter ?? new UrlAdapter(),
       usageLogger: config.usageLogger,
     };
   }

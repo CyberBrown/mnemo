@@ -37,7 +37,7 @@ bunx wrangler deploy
 ### Test Health Endpoint (Public)
 
 ```bash
-curl https://mnemo.solamp.workers.dev/health
+curl https://mnemo.logosflux.io/health
 ```
 
 Expected response:
@@ -55,7 +55,7 @@ Expected response:
 #### Without Authentication (if MNEMO_AUTH_TOKEN is set)
 
 ```bash
-curl -X POST https://mnemo.solamp.workers.dev/tools/context_list \
+curl -X POST https://mnemo.logosflux.io/tools/context_list \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
@@ -71,7 +71,7 @@ Expected response (401):
 #### With Authentication
 
 ```bash
-curl -X POST https://mnemo.solamp.workers.dev/tools/context_list \
+curl -X POST https://mnemo.logosflux.io/tools/context_list \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN_HERE" \
   -d '{}'
