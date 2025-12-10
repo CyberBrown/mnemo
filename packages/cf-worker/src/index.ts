@@ -83,12 +83,25 @@ const rateLimit = (maxRequests: number = 30, windowMs: number = 60000) => {
 // Authentication middleware factory
 // Returns 401 if MNEMO_AUTH_TOKEN is configured and request doesn't have valid Bearer token
 // If no token is configured, allows unauthenticated access (backwards compatible)
+// Service binding requests from same-account workers are automatically allowed
 const requireAuth = () => {
   return async (c: any, next: any) => {
     const authToken = c.env.MNEMO_AUTH_TOKEN;
 
     // If no auth token configured, allow access
     if (!authToken) {
+      return await next();
+    }
+
+    // Allow service binding requests from same-account workers
+    // Service binding requests don't have CF-Connecting-IP (external requests always do)
+    // and the Host header will be the internal worker URL, not a public domain
+    const cfConnectingIP = c.req.header('CF-Connecting-IP');
+    const host = c.req.header('Host') || '';
+
+    // No CF-Connecting-IP means this is an internal worker-to-worker call
+    if (!cfConnectingIP) {
+      console.log(`Service binding request detected (no CF-Connecting-IP), host: ${host}`);
       return await next();
     }
 
