@@ -29,6 +29,14 @@
       "bucket_name": "mnemo-files"
     }
   ],
+
+  // KV for OAuth tokens and authorization codes
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "placeholder-create-with-wrangler"
+    }
+  ],
   
   // Environment variables
   "vars": {
@@ -37,9 +45,15 @@
   
   // Secrets (set via wrangler secret put)
   // GEMINI_API_KEY - Required for Gemini API access
-  // MNEMO_AUTH_TOKEN - Optional Bearer token for authentication
-  //                    If not set, endpoints are publicly accessible
-  //                    If set, /mcp and /tools/:toolName require auth
+  // MNEMO_AUTH_TOKEN - Optional Bearer token for CLI/Claude Code authentication
+  //                    If not set, endpoints are publicly accessible (unless OAuth is enabled)
+  //                    If set, /mcp and /tools/:toolName accept this token
+  //
+  // OAuth 2.0 Configuration (for web clients like Claude.ai):
+  // OAUTH_CLIENT_ID - Client ID for OAuth (single tenant)
+  // OAUTH_CLIENT_SECRET - Client secret for OAuth
+  // CF_ACCESS_TEAM_DOMAIN - e.g., "yourteam.cloudflareaccess.com"
+  // CF_ACCESS_AUD - Application Audience (AUD) tag from CF Access
   
   // Development settings
   "dev": {

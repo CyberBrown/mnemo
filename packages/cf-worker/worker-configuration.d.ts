@@ -5,6 +5,13 @@ interface Env {
 	ENVIRONMENT: "production";
 	STORAGE: R2Bucket;
 	DB: D1Database;
+	OAUTH_KV: KVNamespace;
 	GEMINI_API_KEY: string;
 	MNEMO_AUTH_TOKEN?: string;
+	// OAuth configuration (single-tenant, static values)
+	OAUTH_CLIENT_ID?: string;
+	OAUTH_CLIENT_SECRET?: string;
+	// CF Access configuration for JWT validation
+	CF_ACCESS_TEAM_DOMAIN?: string; // e.g., "yourteam.cloudflareaccess.com"
+	CF_ACCESS_AUD?: string; // Application Audience (AUD) tag
 }
