@@ -25,113 +25,257 @@ const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors());
 app.use('*', logger());
 
-// Rate limiting store (in-memory, resets on Worker restart)
-// For production, consider using KV or Durable Objects for persistence
-interface RateLimitEntry {
-  count: number;
-  resetAt: number;
+// ============================================================================
+// Rate Limiting with KV Storage
+// ============================================================================
+
+interface RateLimitData {
+  requests: number;
+  tokens: number;
+  warningEmailSent: boolean;
+  blockedEmailSent: boolean;
 }
-const rateLimitStore = new Map<string, RateLimitEntry>();
 
-/**
- * Rate limiting middleware
- * Limits requests per IP address to prevent abuse
- * @param maxRequests - Maximum requests allowed per window
- * @param windowMs - Time window in milliseconds (default: 60000 = 1 minute)
- */
-const rateLimit = (maxRequests: number = 30, windowMs: number = 60000) => {
+function getDateKey(): string {
+  return new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+}
+
+async function getRateLimitData(kv: KVNamespace): Promise<RateLimitData> {
+  const key = `ratelimit:daily:${getDateKey()}`;
+  const data = await kv.get(key, 'json');
+  return (data as RateLimitData) || {
+    requests: 0,
+    tokens: 0,
+    warningEmailSent: false,
+    blockedEmailSent: false,
+  };
+}
+
+async function updateRateLimitData(
+  kv: KVNamespace,
+  data: RateLimitData
+): Promise<void> {
+  const key = `ratelimit:daily:${getDateKey()}`;
+  // TTL of 48 hours (172800 seconds)
+  await kv.put(key, JSON.stringify(data), { expirationTtl: 172800 });
+}
+
+// Burst tracking (in-memory, resets on worker restart)
+interface BurstEntry {
+  count: number;
+  windowStart: number;
+}
+const burstTracker = new Map<string, BurstEntry>();
+
+async function checkBurstLimit(
+  ip: string,
+  env: Env
+): Promise<{ exceeded: boolean; count: number }> {
+  const now = Date.now();
+  const windowMs = 60000; // 1 minute
+  const maxBurst = 50;
+
+  const entry = burstTracker.get(ip);
+
+  if (!entry || now - entry.windowStart > windowMs) {
+    burstTracker.set(ip, { count: 1, windowStart: now });
+    return { exceeded: false, count: 1 };
+  }
+
+  entry.count++;
+
+  if (entry.count > maxBurst) {
+    // Send burst alert (async, don't wait)
+    sendAlertEmail(
+      env,
+      'Burst Rate Limit Alert',
+      `Unusual burst detected: ${entry.count} requests in 1 minute from IP ${ip}`
+    ).catch(console.error);
+    return { exceeded: true, count: entry.count };
+  }
+
+  return { exceeded: false, count: entry.count };
+}
+
+// ============================================================================
+// Email Alerts via Resend
+// ============================================================================
+
+async function sendAlertEmail(
+  env: Env,
+  subject: string,
+  message: string
+): Promise<void> {
+  const apiKey = env.RESEND_API_KEY;
+  const alertEmail = env.ALERT_EMAIL || 'chris@solamp.io';
+
+  if (!apiKey) {
+    console.warn('RESEND_API_KEY not configured, skipping email alert');
+    console.log(`Alert: ${subject} - ${message}`);
+    return;
+  }
+
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: 'Mnemo Alerts <alerts@solamp.io>',
+        to: [alertEmail],
+        subject: `[Mnemo] ${subject}`,
+        text: `${message}\n\nTimestamp: ${new Date().toISOString()}`,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('Failed to send alert email:', error);
+    }
+  } catch (error) {
+    console.error('Error sending alert email:', error);
+  }
+}
+
+// ============================================================================
+// Rate Limiting Middleware
+// ============================================================================
+
+const rateLimitMiddleware = () => {
   return async (c: any, next: any) => {
-    // Get client IP from CF headers
-    const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown';
+    const env = c.env as Env;
+    const kv = env.RATE_LIMIT_KV;
+    const ip = c.req.header('CF-Connecting-IP') || 'unknown';
 
-    const now = Date.now();
-    const entry = rateLimitStore.get(ip);
-
-    // Clean up expired entries periodically
-    if (rateLimitStore.size > 10000) {
-      for (const [key, value] of rateLimitStore.entries()) {
-        if (value.resetAt < now) {
-          rateLimitStore.delete(key);
-        }
-      }
-    }
-
-    if (!entry || entry.resetAt < now) {
-      // New window
-      rateLimitStore.set(ip, {
-        count: 1,
-        resetAt: now + windowMs,
-      });
-      return await next();
-    }
-
-    if (entry.count >= maxRequests) {
-      const resetIn = Math.ceil((entry.resetAt - now) / 1000);
+    // Check burst limit first
+    const burst = await checkBurstLimit(ip, env);
+    if (burst.exceeded) {
       return c.json({
         error: 'Rate limit exceeded',
-        message: `Too many requests. Please try again in ${resetIn} seconds.`,
-        retryAfter: resetIn,
+        message: 'Too many requests in a short period. Please slow down.',
       }, 429);
     }
 
-    // Increment counter
-    entry.count++;
+    // Get daily limits from env
+    const dailyRequestLimit = parseInt(env.DAILY_REQUEST_LIMIT || '500', 10);
+    const dailyTokenLimit = parseInt(env.DAILY_TOKEN_LIMIT || '2000000', 10);
+
+    // Get current usage
+    const data = await getRateLimitData(kv);
+
+    // Check if blocked
+    if (data.requests >= dailyRequestLimit) {
+      // Send blocked email if not sent yet
+      if (!data.blockedEmailSent) {
+        data.blockedEmailSent = true;
+        await updateRateLimitData(kv, data);
+        sendAlertEmail(
+          env,
+          'Daily Request Limit EXCEEDED',
+          `Daily request limit of ${dailyRequestLimit} has been reached.\nTotal requests today: ${data.requests}\nTotal tokens today: ${data.tokens}`
+        ).catch(console.error);
+      }
+
+      return c.json({
+        error: 'Daily limit exceeded',
+        message: 'Daily request limit reached. Please try again tomorrow.',
+        limit: dailyRequestLimit,
+        used: data.requests,
+      }, 429);
+    }
+
+    // Check warning threshold (80%)
+    const warningThreshold = Math.floor(dailyRequestLimit * 0.8);
+    if (data.requests >= warningThreshold && !data.warningEmailSent) {
+      data.warningEmailSent = true;
+      await updateRateLimitData(kv, data);
+      sendAlertEmail(
+        env,
+        'Daily Request Limit Warning (80%)',
+        `Approaching daily request limit.\nCurrent requests: ${data.requests} / ${dailyRequestLimit} (${Math.round(data.requests / dailyRequestLimit * 100)}%)\nTotal tokens today: ${data.tokens}`
+      ).catch(console.error);
+    }
+
+    // Increment request count
+    data.requests++;
+    await updateRateLimitData(kv, data);
+
+    // Store data in context for token tracking after response
+    c.set('rateLimitData', data);
+
     return await next();
   };
 };
 
-// Authentication middleware factory
-// Returns 401 if MNEMO_AUTH_TOKEN is configured and request doesn't have valid Bearer token
-// If no token is configured, allows unauthenticated access (backwards compatible)
-// Service binding requests from same-account workers are automatically allowed
-const requireAuth = () => {
-  return async (c: any, next: any) => {
-    const authToken = c.env.MNEMO_AUTH_TOKEN;
+// ============================================================================
+// Write Protection
+// ============================================================================
 
-    // If no auth token configured, allow access
-    if (!authToken) {
-      return await next();
-    }
+// Tools that require passphrase (write operations)
+const WRITE_TOOLS = ['context_load', 'context_refresh', 'context_evict'];
 
-    // Allow service binding requests from same-account workers
-    // Service binding requests don't have CF-Connecting-IP (external requests always do)
-    // and the Host header will be the internal worker URL, not a public domain
-    const cfConnectingIP = c.req.header('CF-Connecting-IP');
-    const host = c.req.header('Host') || '';
+// Tools that don't require passphrase (read operations)
+const READ_TOOLS = ['context_list', 'context_query', 'context_stats'];
 
-    // No CF-Connecting-IP means this is an internal worker-to-worker call
-    if (!cfConnectingIP) {
-      console.log(`Service binding request detected (no CF-Connecting-IP), host: ${host}`);
-      return await next();
-    }
+/**
+ * Check if a tool call requires passphrase and validate it
+ * Returns error message if invalid, null if valid
+ */
+function checkWritePassphrase(
+  toolName: string,
+  args: Record<string, unknown>,
+  env: Env
+): string | null {
+  // If not a write tool, no passphrase needed
+  if (!WRITE_TOOLS.includes(toolName)) {
+    return null;
+  }
 
-    // Auth token is configured, validate request
-    const header = c.req.header('Authorization');
-    if (!header) {
-      return c.json({
-        error: 'Unauthorized',
-        message: 'Missing Authorization header. Use: Authorization: Bearer <token>'
-      }, 401);
-    }
+  // If no passphrase configured, allow all writes (backwards compatible)
+  const expectedPassphrase = env.WRITE_PASSPHRASE;
+  if (!expectedPassphrase) {
+    return null;
+  }
 
-    const token = header.replace(/^Bearer\s+/i, '');
-    if (token !== authToken) {
-      return c.json({
-        error: 'Unauthorized',
-        message: 'Invalid authentication token'
-      }, 401);
-    }
+  // Check passphrase
+  const providedPassphrase = args.passphrase as string | undefined;
+  if (!providedPassphrase) {
+    return 'Write operation requires passphrase';
+  }
 
-    // Valid token, proceed
-    return await next();
+  if (providedPassphrase !== expectedPassphrase) {
+    return 'Invalid passphrase';
+  }
+
+  return null;
+}
+
+/**
+ * Extract tool name and arguments from MCP request
+ */
+function extractToolInfo(request: any): { toolName: string; args: Record<string, unknown> } | null {
+  if (request?.method !== 'tools/call') {
+    return null;
+  }
+
+  const params = request?.params;
+  if (!params?.name || typeof params.name !== 'string') {
+    return null;
+  }
+
+  return {
+    toolName: params.name,
+    args: (params.arguments as Record<string, unknown>) || {},
   };
-};
+}
 
 // ============================================================================
 // Routes
 // ============================================================================
 
-// Health check
+// Health check (no rate limit)
 app.get('/health', (c) => {
   return c.json({
     status: 'ok',
@@ -141,7 +285,7 @@ app.get('/health', (c) => {
   });
 });
 
-// Service info
+// Service info (no rate limit)
 app.get('/', (c) => {
   return c.json({
     name: 'mnemo',
@@ -155,17 +299,34 @@ app.get('/', (c) => {
   });
 });
 
-// List available tools
+// List available tools (no rate limit)
 app.get('/tools', (c) => {
   return c.json({ tools: toolDefinitions });
 });
 
-// MCP protocol endpoint (protected with auth and rate limiting)
-app.post('/mcp', rateLimit(30, 60000), requireAuth(), async (c) => {
+// MCP protocol endpoint (rate limited)
+app.post('/mcp', rateLimitMiddleware(), async (c) => {
   const server = createMCPServer(c.env);
 
   try {
     const request = await c.req.json();
+
+    // Check write passphrase for tool calls
+    const toolInfo = extractToolInfo(request);
+    if (toolInfo) {
+      const error = checkWritePassphrase(toolInfo.toolName, toolInfo.args, c.env);
+      if (error) {
+        return c.json({
+          jsonrpc: '2.0',
+          id: request.id ?? null,
+          result: {
+            content: [{ type: 'text', text: `Error: ${error}` }],
+            isError: true,
+          },
+        });
+      }
+    }
+
     const response = await server.handleRequest(request);
     return c.json(response);
   } catch (error) {
@@ -180,13 +341,20 @@ app.post('/mcp', rateLimit(30, 60000), requireAuth(), async (c) => {
   }
 });
 
-// Direct tool invocation (convenience endpoints, protected with auth and rate limiting)
-app.post('/tools/:toolName', rateLimit(30, 60000), requireAuth(), async (c) => {
+// Direct tool invocation (rate limited)
+app.post('/tools/:toolName', rateLimitMiddleware(), async (c) => {
   const toolName = c.req.param('toolName');
   const server = createMCPServer(c.env);
 
   try {
     const args = await c.req.json();
+
+    // Check write passphrase
+    const passphraseError = checkWritePassphrase(toolName, args, c.env);
+    if (passphraseError) {
+      return c.json({ error: passphraseError }, 403);
+    }
+
     const response = await server.handleRequest({
       jsonrpc: '2.0',
       id: 1,
@@ -208,6 +376,30 @@ app.post('/tools/:toolName', rateLimit(30, 60000), requireAuth(), async (c) => {
   } catch (error) {
     return c.json({ error: 'Invalid request' }, 400);
   }
+});
+
+// Usage stats endpoint (for monitoring)
+app.get('/stats', async (c) => {
+  const kv = c.env.RATE_LIMIT_KV;
+  const data = await getRateLimitData(kv);
+  const dailyRequestLimit = parseInt(c.env.DAILY_REQUEST_LIMIT || '500', 10);
+  const dailyTokenLimit = parseInt(c.env.DAILY_TOKEN_LIMIT || '2000000', 10);
+
+  return c.json({
+    date: getDateKey(),
+    requests: {
+      used: data.requests,
+      limit: dailyRequestLimit,
+      remaining: Math.max(0, dailyRequestLimit - data.requests),
+      percentage: Math.round((data.requests / dailyRequestLimit) * 100),
+    },
+    tokens: {
+      used: data.tokens,
+      limit: dailyTokenLimit,
+      remaining: Math.max(0, dailyTokenLimit - data.tokens),
+      percentage: Math.round((data.tokens / dailyTokenLimit) * 100),
+    },
+  });
 });
 
 // ============================================================================

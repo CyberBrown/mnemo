@@ -5,12 +5,7 @@
   "compatibility_date": "2024-12-01",
   "compatibility_flags": ["nodejs_compat"],
 
-  // Custom domain (requires logosflux.io zone in Cloudflare)
-  "routes": [
-    { "pattern": "mnemo.logosflux.io", "custom_domain": true }
-  ],
-
-  // Keep workers.dev subdomain active as backup
+  // Workers.dev URL only (no custom domain for security through obscurity)
   "workers_dev": true,
 
   // D1 Database for cache metadata
@@ -21,7 +16,7 @@
       "database_id": "1bf57f2d-d380-475f-8faa-b9f791d14662"
     }
   ],
-  
+
   // R2 for file staging (optional)
   "r2_buckets": [
     {
@@ -29,18 +24,28 @@
       "bucket_name": "mnemo-files"
     }
   ],
-  
+
+  // KV for rate limiting
+  "kv_namespaces": [
+    {
+      "binding": "RATE_LIMIT_KV",
+      "id": "60c4a16bdebd469f93a3e143f6d2b115"
+    }
+  ],
+
   // Environment variables
   "vars": {
-    "ENVIRONMENT": "production"
+    "ENVIRONMENT": "production",
+    "ALERT_EMAIL": "chris@solamp.io",
+    "DAILY_REQUEST_LIMIT": "500",
+    "DAILY_TOKEN_LIMIT": "2000000"
   },
-  
+
   // Secrets (set via wrangler secret put)
   // GEMINI_API_KEY - Required for Gemini API access
-  // MNEMO_AUTH_TOKEN - Optional Bearer token for authentication
-  //                    If not set, endpoints are publicly accessible
-  //                    If set, /mcp and /tools/:toolName require auth
-  
+  // RESEND_API_KEY - For sending abuse alert emails
+  // WRITE_PASSPHRASE - Passphrase for write operations (context_load, context_refresh, context_evict)
+
   // Development settings
   "dev": {
     "port": 8787,
