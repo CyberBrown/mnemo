@@ -12,6 +12,7 @@ export const contextLoadSchema = z.object({
   ttl: z.number().min(60).max(86400).optional().describe('Time to live in seconds (default: 3600)'),
   systemInstruction: z.string().optional().describe('System instruction for queries against this cache'),
   githubToken: z.string().optional().describe('GitHub personal access token for private repositories'),
+  passphrase: z.string().optional().describe('Passphrase for write operations (required when WRITE_PASSPHRASE is configured)'),
 }).refine(
   (data) => data.source || (data.sources && data.sources.length > 0),
   { message: 'Either source or sources must be provided' }
@@ -34,6 +35,7 @@ export type ContextListInput = z.infer<typeof contextListSchema>;
 
 export const contextEvictSchema = z.object({
   alias: z.string().describe('Cache alias to evict'),
+  passphrase: z.string().optional().describe('Passphrase for write operations (required when WRITE_PASSPHRASE is configured)'),
 });
 
 export type ContextEvictInput = z.infer<typeof contextEvictSchema>;
@@ -49,6 +51,7 @@ export const contextRefreshSchema = z.object({
   ttl: z.number().min(60).max(86400).optional().describe('New time to live in seconds (optional, uses previous TTL if not specified)'),
   systemInstruction: z.string().optional().describe('System instruction for queries (optional, uses previous instruction if not specified)'),
   githubToken: z.string().optional().describe('GitHub personal access token for private repositories'),
+  passphrase: z.string().optional().describe('Passphrase for write operations (required when WRITE_PASSPHRASE is configured)'),
 });
 
 export type ContextRefreshInput = z.infer<typeof contextRefreshSchema>;
@@ -88,6 +91,10 @@ export const toolDefinitions: MCPToolDefinition[] = [
         githubToken: {
           type: 'string',
           description: 'GitHub personal access token for private repositories',
+        },
+        passphrase: {
+          type: 'string',
+          description: 'Passphrase for write operations (required when WRITE_PASSPHRASE is configured)',
         },
       },
       required: ['alias'],
@@ -138,6 +145,10 @@ export const toolDefinitions: MCPToolDefinition[] = [
           type: 'string',
           description: 'Cache alias to evict',
         },
+        passphrase: {
+          type: 'string',
+          description: 'Passphrase for write operations (required when WRITE_PASSPHRASE is configured)',
+        },
       },
       required: ['alias'],
     },
@@ -177,6 +188,10 @@ export const toolDefinitions: MCPToolDefinition[] = [
         githubToken: {
           type: 'string',
           description: 'GitHub personal access token for private repositories',
+        },
+        passphrase: {
+          type: 'string',
+          description: 'Passphrase for write operations (required when WRITE_PASSPHRASE is configured)',
         },
       },
       required: ['alias'],

@@ -37,6 +37,22 @@ export interface ToolHandlerDeps {
   sourceLoader: SourceLoader;
   urlAdapter?: UrlAdapter;
   usageLogger?: UsageLogger;
+  writePassphrase?: string;
+}
+
+/**
+ * Validate passphrase for write operations
+ * Throws an error if WRITE_PASSPHRASE is configured but passphrase doesn't match
+ */
+function validateWritePassphrase(deps: ToolHandlerDeps, passphrase?: string): void {
+  if (deps.writePassphrase) {
+    if (!passphrase) {
+      throw new Error('Passphrase required for write operations');
+    }
+    if (passphrase !== deps.writePassphrase) {
+      throw new Error('Invalid passphrase');
+    }
+  }
 }
 
 /**
@@ -114,6 +130,7 @@ export async function handleContextLoad(
   rawInput: unknown
 ): Promise<{ success: true; cache: CacheMetadata; sourcesLoaded: number }> {
   const input = contextLoadSchema.parse(rawInput);
+  validateWritePassphrase(deps, input.passphrase);
   const { geminiClient, storage } = deps;
 
   // Check if alias already exists
@@ -248,6 +265,7 @@ export async function handleContextEvict(
   rawInput: unknown
 ): Promise<{ success: true; alias: string }> {
   const input = contextEvictSchema.parse(rawInput);
+  validateWritePassphrase(deps, input.passphrase);
   const { geminiClient, storage } = deps;
 
   // Get cache by alias
@@ -335,6 +353,7 @@ export async function handleContextRefresh(
   rawInput: unknown
 ): Promise<{ success: true; cache: CacheMetadata; previousTokenCount: number; newTokenCount: number }> {
   const input = contextRefreshSchema.parse(rawInput);
+  validateWritePassphrase(deps, input.passphrase);
   const { geminiClient, storage } = deps;
 
   // Get existing cache

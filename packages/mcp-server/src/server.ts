@@ -34,6 +34,7 @@ export interface MnemoMCPServerConfig {
   sourceLoader?: SourceLoader;
   urlAdapter?: UrlAdapter;
   usageLogger?: UsageLogger;
+  writePassphrase?: string;
 }
 
 /**
@@ -51,6 +52,7 @@ export class MnemoMCPServer {
       sourceLoader: config.sourceLoader ?? new SourceLoader(),
       urlAdapter: config.urlAdapter ?? new UrlAdapter(),
       usageLogger: config.usageLogger,
+      writePassphrase: config.writePassphrase,
     };
   }
 
