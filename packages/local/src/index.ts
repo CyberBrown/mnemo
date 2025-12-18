@@ -7,6 +7,10 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import {
   GeminiClient,
+  LocalLLMClient,
+  FallbackLLMClient,
+  type LLMClient,
+  type LocalLLMConfig,
   type CacheStorage,
   type CacheMetadata,
   type CacheListItem,
@@ -14,7 +18,9 @@ import {
   type UsageEntry,
   type UsageStats,
   type UsageOperation,
+  type ContentStore,
   MnemoConfigSchema,
+  LocalLLMConfigSchema,
   calculateCost,
 } from '@mnemo/core';
 import { MnemoMCPServer, toolDefinitions } from '@mnemo/mcp-server';
@@ -27,6 +33,16 @@ const PORT = parseInt(process.env.MNEMO_PORT ?? '8080');
 const MNEMO_DIR = process.env.MNEMO_DIR ?? join(homedir(), '.mnemo');
 const DB_PATH = join(MNEMO_DIR, 'mnemo.db');
 
+// Local model configuration from environment
+const LOCAL_MODEL_URL = process.env.LOCAL_MODEL_URL ?? 'http://localhost:8000';
+const LOCAL_MODEL_NAME = process.env.LOCAL_MODEL_NAME ?? 'nemotron-3-nano';
+const LOCAL_MODEL_API_KEY = process.env.LOCAL_MODEL_API_KEY;
+const LOCAL_MODEL_MAX_TOKENS = parseInt(process.env.LOCAL_MODEL_MAX_TOKENS ?? '262144');
+const LOCAL_MODEL_ENABLED = process.env.LOCAL_MODEL_ENABLED !== 'false'; // Default: enabled
+
+// Track active model for status display
+let activeModelInfo: { primary: string; fallback: string; primaryAvailable: boolean } | null = null;
+
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -35,10 +51,10 @@ async function init() {
   // Ensure directory exists
   await mkdir(MNEMO_DIR, { recursive: true });
 
-  // Check for API key
+  // Check for Gemini API key (required for fallback)
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    console.error('Error: GEMINI_API_KEY environment variable is required');
+    console.error('Error: GEMINI_API_KEY environment variable is required (for fallback)');
     console.error('Get one at: https://aistudio.google.com/app/apikey');
     process.exit(1);
   }
@@ -47,14 +63,70 @@ async function init() {
   const db = new Database(DB_PATH);
   initDatabase(db);
 
-  // Create services
-  const config = MnemoConfigSchema.parse({ geminiApiKey: apiKey });
-  const geminiClient = new GeminiClient(config);
+  // Create Gemini client (always needed for fallback)
+  const geminiConfig = MnemoConfigSchema.parse({ geminiApiKey: apiKey });
+  const geminiClient = new GeminiClient(geminiConfig);
+
+  // Create the LLM client (local + fallback or just Gemini)
+  let llmClient: LLMClient;
+
+  if (LOCAL_MODEL_ENABLED) {
+    // Create persistent content store for local model caches
+    const contentStore = new SQLiteContentStore(db);
+
+    // Create local model client with persistent storage
+    const localConfig: LocalLLMConfig = LocalLLMConfigSchema.parse({
+      baseUrl: LOCAL_MODEL_URL,
+      model: LOCAL_MODEL_NAME,
+      apiKey: LOCAL_MODEL_API_KEY,
+      maxContextTokens: LOCAL_MODEL_MAX_TOKENS,
+    });
+    const localClient = new LocalLLMClient(localConfig, contentStore);
+
+    // Check if local model is available
+    const localAvailable = await localClient.isAvailable();
+
+    // Create fallback client with permission callback
+    llmClient = new FallbackLLMClient({
+      primary: localClient,
+      fallback: geminiClient,
+      autoFallbackForLargeContext: true,
+      onFallbackNeeded: async (event) => {
+        // Log the fallback request
+        console.log(`\n⚠️  Fallback to Gemini requested:`);
+        console.log(`   Reason: ${event.reason}`);
+        console.log(`   Details: ${event.details ?? 'N/A'}`);
+        console.log(`   Allowing fallback to ${event.fallbackModel}`);
+        // For now, auto-approve fallback (can be made interactive later)
+        return true;
+      },
+    });
+
+    activeModelInfo = {
+      primary: LOCAL_MODEL_NAME,
+      fallback: 'gemini-2.0-flash-001',
+      primaryAvailable: localAvailable,
+    };
+
+    if (!localAvailable) {
+      console.warn(`\n⚠️  Local model (${LOCAL_MODEL_NAME}) at ${LOCAL_MODEL_URL} is not available`);
+      console.warn(`   Will fall back to Gemini for all requests\n`);
+    }
+  } else {
+    // Use Gemini only
+    llmClient = geminiClient;
+    activeModelInfo = {
+      primary: 'gemini-2.0-flash-001',
+      fallback: 'gemini-2.0-flash-001',
+      primaryAvailable: true,
+    };
+  }
+
   const storage = new SQLiteCacheStorage(db);
   const usageLogger = new SQLiteUsageLogger(db);
-  const mcpServer = new MnemoMCPServer({ geminiClient, storage, usageLogger });
+  const mcpServer = new MnemoMCPServer({ geminiClient: llmClient, storage, usageLogger });
 
-  return { db, mcpServer, storage, usageLogger };
+  return { db, mcpServer, storage, usageLogger, llmClient };
 }
 
 function initDatabase(db: Database) {
@@ -317,6 +389,59 @@ class SQLiteUsageLogger implements UsageLogger {
 }
 
 // ============================================================================
+// SQLite Content Store Implementation (Persistent storage for local model caches)
+// ============================================================================
+
+class SQLiteContentStore implements ContentStore {
+  constructor(private db: Database) {
+    // Ensure table exists
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS cache_content (
+        cache_name TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_cache_content_expires ON cache_content(expires_at)`);
+  }
+
+  async set(key: string, content: string, ttl = 3600): Promise<void> {
+    const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
+    this.db.run(
+      `INSERT INTO cache_content (cache_name, content, expires_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(cache_name) DO UPDATE SET
+         content = excluded.content,
+         expires_at = excluded.expires_at`,
+      [key, content, expiresAt]
+    );
+  }
+
+  async get(key: string): Promise<string | null> {
+    const result = this.db
+      .query('SELECT content, expires_at FROM cache_content WHERE cache_name = ?')
+      .get(key) as { content: string; expires_at: string } | null;
+
+    if (!result) return null;
+
+    // Check if expired
+    if (new Date() > new Date(result.expires_at)) {
+      // Clean up expired entry
+      this.db.run('DELETE FROM cache_content WHERE cache_name = ?', [key]);
+      return null;
+    }
+
+    return result.content;
+  }
+
+  async delete(key: string): Promise<boolean> {
+    const result = this.db.run('DELETE FROM cache_content WHERE cache_name = ?', [key]);
+    return result.changes > 0;
+  }
+}
+
+// ============================================================================
 // Server
 // ============================================================================
 
@@ -433,6 +558,12 @@ async function main() {
   console.log('');
   console.log(`${DIM}                    ⚡ Mnemo v0.2.0 ⚡${RESET}`);
   console.log('');
+  const GREEN = '\x1b[32m';
+  const YELLOW = '\x1b[33m';
+  const modelStatus = activeModelInfo?.primaryAvailable ? `${GREEN}●` : `${YELLOW}○`;
+  const primaryModel = activeModelInfo?.primary ?? 'unknown';
+  const fallbackModel = activeModelInfo?.fallback ?? 'unknown';
+
   console.log(`${DIM}╔══════════════════════════════════════════════════════════╗${RESET}`);
   console.log(`${DIM}║${RESET}  ${BRIGHT_CYAN}Extended memory for AI assistants${RESET}                      ${DIM}║${RESET}`);
   console.log(`${DIM}╠══════════════════════════════════════════════════════════╣${RESET}`);
@@ -440,6 +571,9 @@ async function main() {
   console.log(`${DIM}║${RESET}  Data:      ${CYAN}${MNEMO_DIR}${RESET}`);
   console.log(`${DIM}║${RESET}  MCP:       ${CYAN}POST /mcp${RESET}                                   ${DIM}║${RESET}`);
   console.log(`${DIM}║${RESET}  Tools:     ${CYAN}GET /tools${RESET}                                  ${DIM}║${RESET}`);
+  console.log(`${DIM}╠══════════════════════════════════════════════════════════╣${RESET}`);
+  console.log(`${DIM}║${RESET}  ${modelStatus}${RESET} Primary:  ${CYAN}${primaryModel}${RESET}`);
+  console.log(`${DIM}║${RESET}    Fallback: ${DIM}${fallbackModel}${RESET}`);
   console.log(`${DIM}╚══════════════════════════════════════════════════════════╝${RESET}`);
   console.log('');
 
