@@ -18,6 +18,7 @@ import {
   type UsageEntry,
   type UsageStats,
   type UsageOperation,
+  type ContentStore,
   MnemoConfigSchema,
   LocalLLMConfigSchema,
   calculateCost,
@@ -70,14 +71,17 @@ async function init() {
   let llmClient: LLMClient;
 
   if (LOCAL_MODEL_ENABLED) {
-    // Create local model client
+    // Create persistent content store for local model caches
+    const contentStore = new SQLiteContentStore(db);
+
+    // Create local model client with persistent storage
     const localConfig: LocalLLMConfig = LocalLLMConfigSchema.parse({
       baseUrl: LOCAL_MODEL_URL,
       model: LOCAL_MODEL_NAME,
       apiKey: LOCAL_MODEL_API_KEY,
       maxContextTokens: LOCAL_MODEL_MAX_TOKENS,
     });
-    const localClient = new LocalLLMClient(localConfig);
+    const localClient = new LocalLLMClient(localConfig, contentStore);
 
     // Check if local model is available
     const localAvailable = await localClient.isAvailable();
@@ -381,6 +385,59 @@ class SQLiteUsageLogger implements UsageLogger {
       cachedTokensUsed: row.cached_tokens_used,
       createdAt: new Date(row.created_at),
     }));
+  }
+}
+
+// ============================================================================
+// SQLite Content Store Implementation (Persistent storage for local model caches)
+// ============================================================================
+
+class SQLiteContentStore implements ContentStore {
+  constructor(private db: Database) {
+    // Ensure table exists
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS cache_content (
+        cache_name TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_cache_content_expires ON cache_content(expires_at)`);
+  }
+
+  async set(key: string, content: string, ttl = 3600): Promise<void> {
+    const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
+    this.db.run(
+      `INSERT INTO cache_content (cache_name, content, expires_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(cache_name) DO UPDATE SET
+         content = excluded.content,
+         expires_at = excluded.expires_at`,
+      [key, content, expiresAt]
+    );
+  }
+
+  async get(key: string): Promise<string | null> {
+    const result = this.db
+      .query('SELECT content, expires_at FROM cache_content WHERE cache_name = ?')
+      .get(key) as { content: string; expires_at: string } | null;
+
+    if (!result) return null;
+
+    // Check if expired
+    if (new Date() > new Date(result.expires_at)) {
+      // Clean up expired entry
+      this.db.run('DELETE FROM cache_content WHERE cache_name = ?', [key]);
+      return null;
+    }
+
+    return result.content;
+  }
+
+  async delete(key: string): Promise<boolean> {
+    const result = this.db.run('DELETE FROM cache_content WHERE cache_name = ?', [key]);
+    return result.changes > 0;
   }
 }
 

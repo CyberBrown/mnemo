@@ -13,6 +13,7 @@ import {
   type UsageEntry,
   type UsageStats,
   type UsageOperation,
+  type ContentStore,
   MnemoConfigSchema,
   calculateCost,
   UrlAdapter,
@@ -444,13 +445,19 @@ function createMCPServer(env: Env): MnemoMCPServer {
   // Create Gemini client (for fallback)
   const geminiClient = new GeminiClient(config);
 
+  // Create D1 content store for local model caching (persists across worker invocations)
+  const contentStore = new D1ContentStore(env.DB);
+
   // Create local model client (Nemotron via vLLM tunnel)
-  const localClient = new LocalLLMClient({
-    baseUrl: LOCAL_MODEL_URL,
-    model: LOCAL_MODEL_NAME,
-    maxContextTokens: LOCAL_MODEL_MAX_TOKENS,
-    timeout: 120000,
-  });
+  const localClient = new LocalLLMClient(
+    {
+      baseUrl: LOCAL_MODEL_URL,
+      model: LOCAL_MODEL_NAME,
+      maxContextTokens: LOCAL_MODEL_MAX_TOKENS,
+      timeout: 120000,
+    },
+    contentStore
+  );
 
   // Create fallback client: Nemotron primary, Gemini fallback
   const llmClient = new FallbackLLMClient({
@@ -609,6 +616,56 @@ class D1CacheStorage implements CacheStorage {
       .prepare(`UPDATE caches SET ${sets.join(', ')} WHERE alias = ?`)
       .bind(...values)
       .run();
+  }
+}
+
+// ============================================================================
+// D1 Content Store Implementation (for local LLM caching)
+// ============================================================================
+
+class D1ContentStore implements ContentStore {
+  constructor(private db: D1Database) {}
+
+  async set(key: string, content: string, ttl = 3600): Promise<void> {
+    const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
+    await this.db
+      .prepare(
+        `INSERT INTO cache_content (cache_name, content, expires_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(cache_name) DO UPDATE SET
+           content = excluded.content,
+           expires_at = excluded.expires_at`
+      )
+      .bind(key, content, expiresAt)
+      .run();
+  }
+
+  async get(key: string): Promise<string | null> {
+    const result = await this.db
+      .prepare(
+        `SELECT content, expires_at FROM cache_content WHERE cache_name = ?`
+      )
+      .bind(key)
+      .first<{ content: string; expires_at: string }>();
+
+    if (!result) return null;
+
+    // Check expiration
+    if (new Date(result.expires_at) < new Date()) {
+      // Expired, delete and return null
+      await this.delete(key);
+      return null;
+    }
+
+    return result.content;
+  }
+
+  async delete(key: string): Promise<boolean> {
+    const result = await this.db
+      .prepare('DELETE FROM cache_content WHERE cache_name = ?')
+      .bind(key)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
   }
 }
 

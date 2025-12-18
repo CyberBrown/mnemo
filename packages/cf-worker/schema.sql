@@ -40,3 +40,15 @@ CREATE INDEX IF NOT EXISTS idx_usage_cache ON usage_logs(cache_id);
 
 -- Index for time-based queries
 CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_logs(created_at);
+
+-- Cache content table for local model storage
+-- Stores actual content for local models (unlike Gemini which stores on their servers)
+CREATE TABLE IF NOT EXISTS cache_content (
+  cache_name TEXT PRIMARY KEY,
+  content TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Index for expiry cleanup
+CREATE INDEX IF NOT EXISTS idx_cache_content_expires ON cache_content(expires_at);
