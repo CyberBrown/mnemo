@@ -36,7 +36,7 @@ const DB_PATH = join(MNEMO_DIR, 'mnemo.db');
 const LOCAL_MODEL_URL = process.env.LOCAL_MODEL_URL ?? 'http://localhost:8000';
 const LOCAL_MODEL_NAME = process.env.LOCAL_MODEL_NAME ?? 'nemotron-3-nano';
 const LOCAL_MODEL_API_KEY = process.env.LOCAL_MODEL_API_KEY;
-const LOCAL_MODEL_MAX_TOKENS = parseInt(process.env.LOCAL_MODEL_MAX_TOKENS ?? '131072');
+const LOCAL_MODEL_MAX_TOKENS = parseInt(process.env.LOCAL_MODEL_MAX_TOKENS ?? '262144');
 const LOCAL_MODEL_ENABLED = process.env.LOCAL_MODEL_ENABLED !== 'false'; // Default: enabled
 
 // Track active model for status display
