@@ -268,9 +268,9 @@ export class TokenLimitError extends MnemoError {
 // ============================================================================
 
 export const MnemoConfigSchema = z.object({
-  /** Gemini API key */
+  /** Gemini API key (required for fallback) */
   geminiApiKey: z.string(),
-  /** Default model for caching */
+  /** Default Gemini model for caching */
   defaultModel: z.string().default('gemini-2.0-flash-001'),
   /** Default TTL in seconds */
   defaultTtl: z.number().default(3600),
@@ -279,3 +279,31 @@ export const MnemoConfigSchema = z.object({
 });
 
 export type MnemoConfig = z.infer<typeof MnemoConfigSchema>;
+
+// ============================================================================
+// Local Model Configuration
+// ============================================================================
+
+export const LocalModelConfigSchema = z.object({
+  /** Whether to use local model as primary */
+  enabled: z.boolean().default(false),
+  /** Base URL for the local LLM API (e.g., http://localhost:8000) */
+  baseUrl: z.string().url().optional(),
+  /** Model name/ID to use */
+  model: z.string().optional(),
+  /** API key if required by local server */
+  apiKey: z.string().optional(),
+  /** Maximum context window tokens */
+  maxContextTokens: z.number().default(131072), // 131K for Nemotron
+  /** Request timeout in ms */
+  timeout: z.number().default(120000), // 2 minutes
+});
+
+export type LocalModelConfig = z.infer<typeof LocalModelConfigSchema>;
+
+export const ExtendedMnemoConfigSchema = MnemoConfigSchema.extend({
+  /** Local model configuration */
+  localModel: LocalModelConfigSchema.optional(),
+});
+
+export type ExtendedMnemoConfig = z.infer<typeof ExtendedMnemoConfigSchema>;

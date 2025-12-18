@@ -1,5 +1,5 @@
 import {
-  GeminiClient,
+  type LLMClient,
   RepoLoader,
   SourceLoader,
   type CacheMetadata,
@@ -31,7 +31,7 @@ import {
 import { stat } from 'node:fs/promises';
 
 export interface ToolHandlerDeps {
-  geminiClient: GeminiClient;
+  geminiClient: LLMClient;
   storage: CacheStorage;
   repoLoader: RepoLoader;
   sourceLoader: SourceLoader;

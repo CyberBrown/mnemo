@@ -6,13 +6,22 @@ import type {
   MnemoConfig,
 } from './types';
 import { CacheNotFoundError, MnemoError } from './types';
+import type { LLMClient, CacheCreateOptions } from './llm-client';
 
 /**
  * Wrapper around Google's GenAI SDK with focus on context caching
+ * Implements LLMClient interface for unified model abstraction
  */
-export class GeminiClient {
+export class GeminiClient implements LLMClient {
+  readonly provider = 'gemini';
+  readonly maxContextTokens = 1_000_000; // Gemini's 1M context window
+
   private ai: GoogleGenAI;
   private config: MnemoConfig;
+
+  get model(): string {
+    return this.config.defaultModel;
+  }
 
   constructor(config: MnemoConfig) {
     this.config = config;
@@ -250,5 +259,22 @@ export class GeminiClient {
     // Rough estimate: 1 token ≈ 4 characters for English
     // Code tends to be denser, so we use 3.5
     return Math.ceil(content.length / 3.5);
+  }
+
+  /**
+   * Check if Gemini API is available
+   */
+  async isAvailable(): Promise<boolean> {
+    try {
+      // Try to list caches as a health check
+      const cacheList = this.ai.caches.list();
+      // Just iterate once to verify connectivity
+      for await (const _ of cacheList as any) {
+        break;
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

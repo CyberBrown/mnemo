@@ -1,5 +1,5 @@
 import {
-  GeminiClient,
+  type LLMClient,
   RepoLoader,
   SourceLoader,
   UrlAdapter,
@@ -28,7 +28,7 @@ import {
 } from './tools/handlers';
 
 export interface MnemoMCPServerConfig {
-  geminiClient: GeminiClient;
+  geminiClient: LLMClient;
   storage: CacheStorage;
   repoLoader?: RepoLoader;
   sourceLoader?: SourceLoader;
