@@ -65,7 +65,10 @@ interface ChatCompletionResponse {
     index: number;
     message: {
       role: string;
-      content: string;
+      content: string | null;
+      // Nemotron-specific: reasoning models return content in reasoning_content
+      reasoning_content?: string;
+      reasoning?: string;
     };
     finish_reason: string;
   }>;
@@ -74,6 +77,26 @@ interface ChatCompletionResponse {
     completion_tokens: number;
     total_tokens: number;
   };
+}
+
+/**
+ * Extract response text from various model response formats
+ * Handles standard content, Nemotron reasoning_content, etc.
+ */
+function extractResponseText(message: ChatCompletionResponse['choices'][0]['message']): string {
+  // Standard content field
+  if (message.content) {
+    return message.content;
+  }
+  // Nemotron reasoning models use reasoning_content
+  if (message.reasoning_content) {
+    return message.reasoning_content;
+  }
+  // Fallback to reasoning field
+  if (message.reasoning) {
+    return message.reasoning;
+  }
+  return '';
 }
 
 /**
@@ -199,7 +222,7 @@ export class LocalLLMClient implements LLMClient {
 
       const data: ChatCompletionResponse = await response.json();
 
-      const responseText = data.choices[0]?.message?.content ?? '';
+      const responseText = data.choices[0]?.message ? extractResponseText(data.choices[0].message) : '';
       const promptTokens = data.usage?.prompt_tokens ?? this.estimateTokens(cachedContent + query);
       const completionTokens = data.usage?.completion_tokens ?? this.estimateTokens(responseText);
 
@@ -317,7 +340,7 @@ export class LocalLLMClient implements LLMClient {
 
       const data: ChatCompletionResponse = await response.json();
 
-      const responseText = data.choices[0]?.message?.content ?? '';
+      const responseText = data.choices[0]?.message ? extractResponseText(data.choices[0].message) : '';
       const promptTokens = data.usage?.prompt_tokens ?? this.estimateTokens(context + query);
       const completionTokens = data.usage?.completion_tokens ?? this.estimateTokens(responseText);
 
