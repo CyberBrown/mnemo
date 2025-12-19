@@ -226,10 +226,18 @@ export class LocalLLMClient implements LLMClient {
       const promptTokens = data.usage?.prompt_tokens ?? this.estimateTokens(cachedContent + query);
       const completionTokens = data.usage?.completion_tokens ?? this.estimateTokens(responseText);
 
+      // For local models, all context is "cached" (stored locally)
+      // Use actual prompt tokens from API if available, otherwise estimate
+      // Ensure cachedTokensUsed never exceeds promptTokens to avoid negative output token calculations
+      const estimatedCacheTokens = this.estimateTokens(cachedContent);
+      const cachedTokensUsed = data.usage?.prompt_tokens
+        ? Math.min(estimatedCacheTokens, promptTokens)
+        : estimatedCacheTokens;
+
       return {
         response: responseText,
         tokensUsed: promptTokens + completionTokens,
-        cachedTokensUsed: this.estimateTokens(cachedContent), // All context tokens are "cached" (stored locally)
+        cachedTokensUsed,
         model: this.model,
       };
     } catch (error) {

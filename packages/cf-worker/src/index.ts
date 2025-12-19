@@ -297,11 +297,14 @@ app.get('/health', async (c) => {
     localModelAvailable = false;
   }
 
+  const geminiFallbackEnabled = c.env.ENABLE_GEMINI_FALLBACK === 'true' && !!c.env.GEMINI_API_KEY;
+
   return c.json({
     status: 'ok',
     service: 'mnemo',
     version: '0.2.0',
     environment: c.env.ENVIRONMENT,
+    mode: geminiFallbackEnabled ? 'fallback' : 'local-only',
     models: {
       primary: {
         name: LOCAL_MODEL_NAME,
@@ -310,7 +313,7 @@ app.get('/health', async (c) => {
       },
       fallback: {
         name: 'gemini-2.0-flash-001',
-        available: true, // Assume Gemini is always available
+        enabled: geminiFallbackEnabled,
       },
     },
   });
@@ -438,13 +441,6 @@ app.get('/stats', async (c) => {
 // ============================================================================
 
 function createMCPServer(env: Env): MnemoMCPServer {
-  const config = MnemoConfigSchema.parse({
-    geminiApiKey: env.GEMINI_API_KEY,
-  });
-
-  // Create Gemini client (for fallback)
-  const geminiClient = new GeminiClient(config);
-
   // Create D1 content store for local model caching (persists across worker invocations)
   const contentStore = new D1ContentStore(env.DB);
 
@@ -454,21 +450,37 @@ function createMCPServer(env: Env): MnemoMCPServer {
       baseUrl: LOCAL_MODEL_URL,
       model: LOCAL_MODEL_NAME,
       maxContextTokens: LOCAL_MODEL_MAX_TOKENS,
-      timeout: 120000,
+      timeout: 300000, // 5 minutes for large context queries
     },
     contentStore
   );
 
-  // Create fallback client: Nemotron primary, Gemini fallback
-  const llmClient = new FallbackLLMClient({
-    primary: localClient,
-    fallback: geminiClient,
-    autoFallbackForLargeContext: true,
-    onFallbackNeeded: async (event) => {
-      console.log(`Fallback to Gemini: ${event.reason} - ${event.details ?? 'N/A'}`);
-      return true; // Auto-approve fallback in CF worker
-    },
-  });
+  // Determine which LLM client to use
+  let llmClient: LLMClient;
+  const enableGeminiFallback = env.ENABLE_GEMINI_FALLBACK === 'true';
+
+  if (enableGeminiFallback && env.GEMINI_API_KEY) {
+    // Use Gemini as fallback when enabled and API key is available
+    const config = MnemoConfigSchema.parse({
+      geminiApiKey: env.GEMINI_API_KEY,
+    });
+    const geminiClient = new GeminiClient(config);
+
+    llmClient = new FallbackLLMClient({
+      primary: localClient,
+      fallback: geminiClient,
+      autoFallbackForLargeContext: true,
+      onFallbackNeeded: async (event) => {
+        console.log(`Fallback to Gemini: ${event.reason} - ${event.details ?? 'N/A'}`);
+        return true; // Auto-approve fallback in CF worker
+      },
+    });
+    console.log('Using Nemotron with Gemini fallback');
+  } else {
+    // Local-only mode: no Gemini fallback
+    llmClient = localClient;
+    console.log('Using Nemotron local-only mode (no Gemini fallback)');
+  }
 
   const storage = new D1CacheStorage(env.DB);
   const usageLogger = new D1UsageLogger(env.DB);
