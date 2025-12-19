@@ -52,3 +52,24 @@ CREATE TABLE IF NOT EXISTS cache_content (
 
 -- Index for expiry cleanup
 CREATE INDEX IF NOT EXISTS idx_cache_content_expires ON cache_content(expires_at);
+
+-- Workflow jobs table for async query results
+CREATE TABLE IF NOT EXISTS workflow_jobs (
+  id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  query TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'running', 'complete', 'error'
+  result TEXT, -- JSON result when complete
+  error TEXT, -- Error message if failed
+  tokens_used INTEGER DEFAULT 0,
+  cached_tokens_used INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  completed_at TEXT
+);
+
+-- Index for status queries
+CREATE INDEX IF NOT EXISTS idx_workflow_jobs_status ON workflow_jobs(status);
+
+-- Index for workflow ID lookups
+CREATE INDEX IF NOT EXISTS idx_workflow_jobs_workflow ON workflow_jobs(workflow_id);

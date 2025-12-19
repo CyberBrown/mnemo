@@ -5,6 +5,13 @@ interface Env {
 	ENVIRONMENT: "production";
 	STORAGE: R2Bucket;
 	DB: D1Database;
-	GEMINI_API_KEY: string;
+	RATE_LIMIT_KV: KVNamespace;
+	GEMINI_API_KEY?: string;
 	MNEMO_AUTH_TOKEN?: string;
+	WRITE_PASSPHRASE?: string;
+	ENABLE_GEMINI_FALLBACK?: string;
+	ALERT_EMAIL?: string;
+	DAILY_REQUEST_LIMIT?: string;
+	DAILY_TOKEN_LIMIT?: string;
+	QUERY_WORKFLOW: Workflow;
 }

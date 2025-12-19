@@ -33,6 +33,15 @@
     }
   ],
 
+  // Workflows for async long-running queries
+  "workflows": [
+    {
+      "name": "mnemo-query-workflow",
+      "binding": "QUERY_WORKFLOW",
+      "class_name": "QueryWorkflow"
+    }
+  ],
+
   // Environment variables
   "vars": {
     "ENVIRONMENT": "production",

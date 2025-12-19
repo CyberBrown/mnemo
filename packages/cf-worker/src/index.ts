@@ -412,6 +412,99 @@ app.post('/tools/:toolName', rateLimitMiddleware(), async (c) => {
   }
 });
 
+// ============================================================================
+// Async Query Endpoints (for long-running queries)
+// ============================================================================
+
+// Submit async query - returns job ID immediately
+app.post('/query/async', rateLimitMiddleware(), async (c) => {
+  try {
+    const { alias, query, maxTokens, temperature } = await c.req.json();
+
+    if (!alias || !query) {
+      return c.json({ error: 'alias and query are required' }, 400);
+    }
+
+    // Verify cache exists
+    const cache = await c.env.DB.prepare(
+      'SELECT gemini_cache_name FROM caches WHERE alias = ?'
+    ).bind(alias).first();
+
+    if (!cache) {
+      return c.json({ error: `Cache not found: ${alias}` }, 404);
+    }
+
+    // Generate job ID
+    const jobId = crypto.randomUUID();
+
+    // Create workflow instance
+    const instance = await c.env.QUERY_WORKFLOW.create({
+      id: jobId,
+      params: { jobId, alias, query, maxTokens, temperature },
+    });
+
+    // Store job in D1
+    await c.env.DB.prepare(
+      `INSERT INTO workflow_jobs (id, workflow_id, alias, query, status, created_at)
+       VALUES (?, ?, ?, ?, 'pending', ?)`
+    ).bind(jobId, instance.id, alias, query, new Date().toISOString()).run();
+
+    return c.json({
+      jobId,
+      status: 'pending',
+      message: 'Query submitted. Poll /query/status/:jobId for results.',
+    });
+  } catch (error) {
+    console.error('Async query error:', error);
+    return c.json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
+  }
+});
+
+// Check async query status
+app.get('/query/status/:jobId', async (c) => {
+  const jobId = c.req.param('jobId');
+
+  const job = await c.env.DB.prepare(
+    `SELECT id, alias, query, status, result, error, tokens_used, cached_tokens_used, created_at, completed_at
+     FROM workflow_jobs WHERE id = ?`
+  ).bind(jobId).first<{
+    id: string;
+    alias: string;
+    query: string;
+    status: string;
+    result: string | null;
+    error: string | null;
+    tokens_used: number;
+    cached_tokens_used: number;
+    created_at: string;
+    completed_at: string | null;
+  }>();
+
+  if (!job) {
+    return c.json({ error: 'Job not found' }, 404);
+  }
+
+  const response: Record<string, unknown> = {
+    jobId: job.id,
+    status: job.status,
+    alias: job.alias,
+    createdAt: job.created_at,
+  };
+
+  if (job.status === 'complete' && job.result) {
+    response.result = JSON.parse(job.result);
+    response.completedAt = job.completed_at;
+    response.tokensUsed = job.tokens_used;
+    response.cachedTokensUsed = job.cached_tokens_used;
+  }
+
+  if (job.status === 'error' && job.error) {
+    response.error = job.error;
+  }
+
+  return c.json(response);
+});
+
 // Usage stats endpoint (for monitoring)
 app.get('/stats', async (c) => {
   const kv = c.env.RATE_LIMIT_KV;
@@ -793,5 +886,8 @@ class D1UsageLogger implements UsageLogger {
     }));
   }
 }
+
+// Export workflow class for Cloudflare
+export { QueryWorkflow } from './workflow';
 
 export default app;
