@@ -206,7 +206,7 @@ describe('handleContextLoad', () => {
     const inputTooHigh = {
       source: '/test',
       alias: 'test',
-      ttl: 90000, // Max is 86400
+      ttl: 700000, // Max is 604800 (1 week)
     };
 
     await expect(handleContextLoad(deps, inputTooHigh)).rejects.toThrow();
@@ -1260,7 +1260,7 @@ describe('handleContextRefresh', () => {
     ).rejects.toThrow();
 
     await expect(
-      handleContextRefresh(deps, { alias: 'test', ttl: 90000 })
+      handleContextRefresh(deps, { alias: 'test', ttl: 700000 }) // Max is 604800 (1 week)
     ).rejects.toThrow();
   });
 

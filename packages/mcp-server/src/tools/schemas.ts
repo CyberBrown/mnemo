@@ -9,7 +9,10 @@ export const contextLoadSchema = z.object({
   source: z.string().optional().describe('Path to local directory, file, or GitHub URL to load'),
   sources: z.array(z.string()).optional().describe('Multiple sources to load into a single cache'),
   alias: z.string().min(1).max(64).describe('Friendly name for this cache'),
-  ttl: z.number().min(60).max(86400).optional().describe('Time to live in seconds (default: 3600)'),
+  // TTL: Default 1 hour (3600s) for Gemini compatibility.
+  // With local Nemotron (no Gemini 1-hour minimum billing), we can use much longer TTLs.
+  // Future: Consider 24h+ TTLs (604800 = 1 week) when running purely on local models.
+  ttl: z.number().min(60).max(604800).optional().describe('Time to live in seconds (default: 3600, max: 604800/1 week)'),
   systemInstruction: z.string().optional().describe('System instruction for queries against this cache'),
   githubToken: z.string().optional().describe('GitHub personal access token for private repositories'),
   passphrase: z.string().optional().describe('Passphrase for write operations (required when WRITE_PASSPHRASE is configured)'),
@@ -48,7 +51,8 @@ export type ContextStatsInput = z.infer<typeof contextStatsSchema>;
 
 export const contextRefreshSchema = z.object({
   alias: z.string().describe('Cache alias to refresh'),
-  ttl: z.number().min(60).max(86400).optional().describe('New time to live in seconds (optional, uses previous TTL if not specified)'),
+  // TTL: See contextLoadSchema for notes on extended TTLs with local models
+  ttl: z.number().min(60).max(604800).optional().describe('New time to live in seconds (optional, uses previous TTL if not specified, max: 604800/1 week)'),
   systemInstruction: z.string().optional().describe('System instruction for queries (optional, uses previous instruction if not specified)'),
   githubToken: z.string().optional().describe('GitHub personal access token for private repositories'),
   passphrase: z.string().optional().describe('Passphrase for write operations (required when WRITE_PASSPHRASE is configured)'),
@@ -82,7 +86,7 @@ export const toolDefinitions: MCPToolDefinition[] = [
         },
         ttl: {
           type: 'number',
-          description: 'Time to live in seconds (60-86400, default: 3600)',
+          description: 'Time to live in seconds (60-604800, default: 3600). Longer TTLs available with local models.',
         },
         systemInstruction: {
           type: 'string',
@@ -179,7 +183,7 @@ export const toolDefinitions: MCPToolDefinition[] = [
         },
         ttl: {
           type: 'number',
-          description: 'New time to live in seconds (60-86400, optional)',
+          description: 'New time to live in seconds (60-604800, optional). Longer TTLs available with local models.',
         },
         systemInstruction: {
           type: 'string',

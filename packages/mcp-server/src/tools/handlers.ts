@@ -122,13 +122,21 @@ function combineLoadedSources(sources: LoadedSource[], sourceNames: string[]): L
   };
 }
 
+/** Timing metrics for context_load */
+export interface LoadTiming {
+  loadMs: number;
+  tokensLoaded: number;
+  tokensPerSecond: number;
+}
+
 /**
  * Load a source into the context cache
  */
 export async function handleContextLoad(
   deps: ToolHandlerDeps,
   rawInput: unknown
-): Promise<{ success: true; cache: CacheMetadata; sourcesLoaded: number }> {
+): Promise<{ success: true; cache: CacheMetadata; sourcesLoaded: number; timing: LoadTiming }> {
+  const startTime = Date.now();
   const input = contextLoadSchema.parse(rawInput);
   validateWritePassphrase(deps, input.passphrase);
   const { geminiClient, storage } = deps;
@@ -168,6 +176,9 @@ export async function handleContextLoad(
   }
 
   // Create Gemini cache
+  // Note: TTL defaults to 1 hour (3600s) for Gemini compatibility.
+  // With local Nemotron (no Gemini 1-hour cache limit), we can extend this significantly in the future.
+  // Consider 24h+ TTLs when running purely on local models.
   const cacheMetadata = await geminiClient.createCache(
     loadedSource.content,
     input.alias,
@@ -194,7 +205,30 @@ export async function handleContextLoad(
     });
   }
 
-  return { success: true, cache: cacheMetadata, sourcesLoaded: sourcesToLoad.length };
+  // Calculate timing metrics
+  const loadMs = Date.now() - startTime;
+  const tokensLoaded = loadedSource.totalTokens;
+  const tokensPerSecond = loadMs > 0 ? Math.round((tokensLoaded / loadMs) * 1000) : 0;
+
+  return {
+    success: true,
+    cache: cacheMetadata,
+    sourcesLoaded: sourcesToLoad.length,
+    timing: { loadMs, tokensLoaded, tokensPerSecond },
+  };
+}
+
+/** Timing metrics for context_query */
+export interface QueryTiming {
+  queryMs: number;
+  contextTokens: number;
+  outputTokens: number;
+  tokensPerSecond: number;
+}
+
+/** Extended query result with timing */
+export interface QueryResultWithTiming extends QueryResult {
+  timing: QueryTiming;
 }
 
 /**
@@ -203,7 +237,8 @@ export async function handleContextLoad(
 export async function handleContextQuery(
   deps: ToolHandlerDeps,
   rawInput: unknown
-): Promise<QueryResult> {
+): Promise<QueryResultWithTiming> {
+  const startTime = Date.now();
   const input = contextQuerySchema.parse(rawInput);
   const { geminiClient, storage } = deps;
 
@@ -235,25 +270,47 @@ export async function handleContextQuery(
     });
   }
 
-  return result;
+  // Calculate timing metrics
+  const queryMs = Date.now() - startTime;
+  const contextTokens = result.cachedTokensUsed;
+  const outputTokens = result.tokensUsed - result.cachedTokensUsed;
+  const tokensPerSecond = queryMs > 0 ? Math.round((outputTokens / queryMs) * 1000) : 0;
+
+  return {
+    ...result,
+    timing: { queryMs, contextTokens, outputTokens, tokensPerSecond },
+  };
 }
 
 /**
- * List all active caches
+ * List all active caches (filters out expired caches and cleans them up)
  */
 export async function handleContextList(
   deps: ToolHandlerDeps
-): Promise<{ caches: Array<{ alias: string; tokenCount: number; expiresAt: string; source: string }> }> {
+): Promise<{ caches: Array<{ alias: string; tokenCount: number; expiresAt: string; source: string }>; expiredCount: number }> {
   const { storage } = deps;
-  const caches = await storage.list();
+  const allCaches = await storage.list();
+  const now = new Date();
+
+  // Separate active and expired caches
+  const activeCaches = allCaches.filter((c) => c.expiresAt > now);
+  const expiredCaches = allCaches.filter((c) => c.expiresAt <= now);
+
+  // Clean up expired caches in background (don't await to avoid slowing response)
+  if (expiredCaches.length > 0) {
+    Promise.all(expiredCaches.map((c) => storage.deleteByAlias(c.alias))).catch((err) =>
+      console.error('Failed to clean up expired caches:', err)
+    );
+  }
 
   return {
-    caches: caches.map((c) => ({
+    caches: activeCaches.map((c) => ({
       alias: c.alias,
       tokenCount: c.tokenCount,
       expiresAt: c.expiresAt.toISOString(),
       source: c.source,
     })),
+    expiredCount: expiredCaches.length,
   };
 }
 

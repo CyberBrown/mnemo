@@ -310,7 +310,7 @@ app.get('/health', async (c) => {
       },
       fallback: {
         name: 'gemini-2.0-flash-001',
-        available: true, // Assume Gemini is always available
+        available: !!c.env.GEMINI_API_KEY,
       },
     },
   });
@@ -442,9 +442,6 @@ function createMCPServer(env: Env): MnemoMCPServer {
     geminiApiKey: env.GEMINI_API_KEY,
   });
 
-  // Create Gemini client (for fallback)
-  const geminiClient = new GeminiClient(config);
-
   // Create D1 content store for local model caching (persists across worker invocations)
   const contentStore = new D1ContentStore(env.DB);
 
@@ -459,16 +456,23 @@ function createMCPServer(env: Env): MnemoMCPServer {
     contentStore
   );
 
-  // Create fallback client: Nemotron primary, Gemini fallback
-  const llmClient = new FallbackLLMClient({
-    primary: localClient,
-    fallback: geminiClient,
-    autoFallbackForLargeContext: true,
-    onFallbackNeeded: async (event) => {
-      console.log(`Fallback to Gemini: ${event.reason} - ${event.details ?? 'N/A'}`);
-      return true; // Auto-approve fallback in CF worker
-    },
-  });
+  // Use fallback client only if Gemini API key is available
+  let llmClient: LLMClient;
+  if (env.GEMINI_API_KEY) {
+    const geminiClient = new GeminiClient(config);
+    llmClient = new FallbackLLMClient({
+      primary: localClient,
+      fallback: geminiClient,
+      autoFallbackForLargeContext: true,
+      onFallbackNeeded: async (event) => {
+        console.log(`Fallback to Gemini: ${event.reason} - ${event.details ?? 'N/A'}`);
+        return true; // Auto-approve fallback in CF worker
+      },
+    });
+  } else {
+    console.log('No GEMINI_API_KEY configured - using local model only (no fallback)');
+    llmClient = localClient;
+  }
 
   const storage = new D1CacheStorage(env.DB);
   const usageLogger = new D1UsageLogger(env.DB);

@@ -268,8 +268,8 @@ export class TokenLimitError extends MnemoError {
 // ============================================================================
 
 export const MnemoConfigSchema = z.object({
-  /** Gemini API key (required for fallback) */
-  geminiApiKey: z.string(),
+  /** Gemini API key (optional - only needed for Gemini fallback) */
+  geminiApiKey: z.string().optional(),
   /** Default Gemini model for caching */
   defaultModel: z.string().default('gemini-2.0-flash-001'),
   /** Default TTL in seconds */

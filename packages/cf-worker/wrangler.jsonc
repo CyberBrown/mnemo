@@ -37,7 +37,7 @@
   "vars": {
     "ENVIRONMENT": "production",
     "ALERT_EMAIL": "chris@solamp.io",
-    "DAILY_REQUEST_LIMIT": "500",
+    "DAILY_REQUEST_LIMIT": "5000",
     "DAILY_TOKEN_LIMIT": "2000000"
   },
 
