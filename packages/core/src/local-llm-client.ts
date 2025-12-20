@@ -194,22 +194,35 @@ export class LocalLLMClient implements LLMClient {
       content = cachedData;
     }
 
-    // Build system message with instruction (if any) and context
-    const systemMessage = systemInstruction
-      ? `${systemInstruction}\n\nContext:\n${content}`
-      : `You are a helpful assistant. Use this context to answer questions:\n\n${content}`;
-
     // Build messages for the chat completion
-    const messages: ChatCompletionRequest['messages'] = [
-      {
-        role: 'system',
-        content: systemMessage,
-      },
-      {
-        role: 'user',
-        content: query,
-      },
-    ];
+    // Use separate messages: system instruction, context as user message, then query
+    const messages: ChatCompletionRequest['messages'] = [];
+
+    // System instruction (short, will be respected)
+    const effectiveInstruction = systemInstruction ??
+      'Be extremely concise. Answer in 1-3 sentences. No markdown, no bullet points, no headers.';
+    messages.push({
+      role: 'system',
+      content: effectiveInstruction,
+    });
+
+    // Context as a user message (so it doesn't dilute the system instruction)
+    messages.push({
+      role: 'user',
+      content: `Here is the codebase context:\n\n${content}`,
+    });
+
+    // Assistant acknowledgment
+    messages.push({
+      role: 'assistant',
+      content: 'I have the codebase context. I will answer concisely without markdown formatting.',
+    });
+
+    // Actual query with reminder
+    messages.push({
+      role: 'user',
+      content: `${query}\n\n(Remember: 1-3 sentences, no markdown)`,
+    });
 
     const requestBody: ChatCompletionRequest = {
       model: this.model,
