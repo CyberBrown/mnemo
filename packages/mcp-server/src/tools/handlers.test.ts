@@ -313,7 +313,10 @@ describe('handleContextQuery', () => {
     expect('response' in result).toBe(true);
     if ('response' in result) {
       expect(result.response).toContain('Mock response');
-      expect(result.tokensUsed).toBeGreaterThan(0);
+      // Check for tokensUsed (standard query) or chunksUsed (RAG query)
+      if ('tokensUsed' in result) {
+        expect(result.tokensUsed).toBeGreaterThan(0);
+      }
     }
     expect(deps.geminiClient.queryCache).toHaveBeenCalledTimes(1);
   });

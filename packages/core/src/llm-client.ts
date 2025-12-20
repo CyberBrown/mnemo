@@ -47,6 +47,17 @@ export interface LLMClient {
   ): Promise<QueryResult>;
 
   /**
+   * Query without a cache (for RAG-style queries with custom context)
+   * @param query - The question or instruction
+   * @param options - Query options including optional system instruction and context
+   * @returns Query result with response and token usage
+   */
+  query(
+    query: string,
+    options?: QueryOptions & { systemInstruction?: string; context?: string }
+  ): Promise<QueryResult>;
+
+  /**
    * Delete a cache
    * @param cacheName - Cache identifier
    */

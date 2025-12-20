@@ -287,6 +287,17 @@ export class LocalLLMClient implements LLMClient {
   }
 
   /**
+   * Query without a cache (for RAG-style queries with custom context)
+   * Implements the LLMClient interface
+   */
+  async query(
+    query: string,
+    options: QueryOptions & { systemInstruction?: string; context?: string } = {}
+  ): Promise<QueryResult> {
+    return this.queryDirect(options.context ?? '', query, options);
+  }
+
+  /**
    * Query without using cache (direct query with context in request)
    * Useful for one-off queries or when cache isn't needed
    */

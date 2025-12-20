@@ -60,6 +60,19 @@ export const contextRefreshSchema = z.object({
 
 export type ContextRefreshInput = z.infer<typeof contextRefreshSchema>;
 
+export const contextIndexSchema = z.object({
+  source: z.string().optional().describe('Path to local directory, file, or GitHub URL to index'),
+  sources: z.array(z.string()).optional().describe('Multiple sources to index together'),
+  alias: z.string().min(1).max(64).describe('Unique name for this index'),
+  githubToken: z.string().optional().describe('GitHub personal access token for private repositories'),
+  passphrase: z.string().optional().describe('Passphrase for write operations (required when WRITE_PASSPHRASE is configured)'),
+}).refine(
+  (data) => data.source || (data.sources && data.sources.length > 0),
+  { message: 'Either source or sources must be provided' }
+);
+
+export type ContextIndexInput = z.infer<typeof contextIndexSchema>;
+
 // ============================================================================
 // Tool Definitions (MCP format)
 // ============================================================================
@@ -188,6 +201,37 @@ export const toolDefinitions: MCPToolDefinition[] = [
         systemInstruction: {
           type: 'string',
           description: 'System instruction for queries (optional)',
+        },
+        githubToken: {
+          type: 'string',
+          description: 'GitHub personal access token for private repositories',
+        },
+        passphrase: {
+          type: 'string',
+          description: 'Passphrase for write operations (required when WRITE_PASSPHRASE is configured)',
+        },
+      },
+      required: ['alias'],
+    },
+  },
+  {
+    name: 'context_index',
+    description: 'Index a source into Vectorize for RAG-based querying. Chunks the source into semantic pieces, generates embeddings, and stores in Cloudflare Vectorize. Use this for large repos to enable fast, targeted queries without loading full context.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: {
+          type: 'string',
+          description: 'Single source: local path or GitHub URL (e.g., https://github.com/owner/repo)',
+        },
+        sources: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Multiple sources to index together',
+        },
+        alias: {
+          type: 'string',
+          description: 'Unique name for this index (1-64 chars)',
         },
         githubToken: {
           type: 'string',

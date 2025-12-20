@@ -251,6 +251,47 @@ export class GeminiClient implements LLMClient {
   }
 
   /**
+   * Query without a cache (for RAG-style queries with custom context)
+   * Implements the LLMClient interface
+   */
+  async query(
+    query: string,
+    options: QueryOptions & { systemInstruction?: string; context?: string } = {}
+  ): Promise<QueryResult> {
+    try {
+      // Build the content with optional context
+      const contents = options.context
+        ? `Context:\n${options.context}\n\nQuestion: ${query}`
+        : query;
+
+      const response = await this.ai.models.generateContent({
+        model: this.config.defaultModel,
+        contents,
+        config: {
+          systemInstruction: options.systemInstruction,
+          maxOutputTokens: options.maxOutputTokens,
+          temperature: options.temperature,
+          stopSequences: options.stopSequences,
+        },
+      });
+
+      const usage = response.usageMetadata;
+
+      return {
+        response: response.text ?? '',
+        tokensUsed: usage?.totalTokenCount ?? 0,
+        cachedTokensUsed: 0, // No caching for direct queries
+        model: this.config.defaultModel,
+      };
+    } catch (error) {
+      throw new MnemoError(
+        `Query failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'QUERY_FAILED'
+      );
+    }
+  }
+
+  /**
    * Estimate token count for content
    * Simple estimation: ~4 chars per token for English text
    * More accurate would use the tokenizer, but this is good enough for planning

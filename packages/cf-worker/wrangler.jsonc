@@ -38,6 +38,19 @@
     }
   ],
 
+  // Workers AI for embeddings
+  "ai": {
+    "binding": "AI"
+  },
+
+  // Vectorize for vector storage (RAG)
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "mnemo-chunks"
+    }
+  ],
+
   // Environment variables
   "vars": {
     "ENVIRONMENT": "production",
