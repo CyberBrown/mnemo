@@ -49,9 +49,7 @@ import { stat } from 'node:fs/promises';
  * Default system instruction for code analysis caches
  */
 const DEFAULT_SYSTEM_INSTRUCTION =
-  'You are a code analysis assistant. Answer questions about this codebase directly and concisely. ' +
-  'Avoid markdown tables, excessive formatting, and verbose explanations unless specifically requested. ' +
-  'Lead with the direct answer, then add brief context only if necessary.';
+  'Be extremely concise. Answer in 1-3 sentences maximum. No markdown formatting, no bullet points, no headers. Just the direct answer.';
 
 /**
  * Configuration for async query polling
