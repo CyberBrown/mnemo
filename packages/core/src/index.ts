@@ -13,6 +13,9 @@ export { LocalLLMClient, InMemoryContentStore, type ContentStore } from './local
 // Fallback LLM Client (local primary, Gemini fallback)
 export { FallbackLLMClient, type FallbackLLMClientConfig } from './fallback-llm-client';
 
+// Async LLM Client (HTTP polling for long queries)
+export { AsyncLLMClient, AsyncQueryError, type AsyncQueryConfig } from './async-llm-client';
+
 // Loaders
 export { RepoLoader, loadGitHubRepo, loadGitHubRepoViaAPI, isUrl, isGitHubUrl, type GitHubLoadOptions } from './repo-loader';
 export { SourceLoader } from './source-loader';

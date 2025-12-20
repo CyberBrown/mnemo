@@ -52,3 +52,23 @@ CREATE TABLE IF NOT EXISTS cache_content (
 
 -- Index for expiry cleanup
 CREATE INDEX IF NOT EXISTS idx_cache_content_expires ON cache_content(expires_at);
+
+-- Async query jobs table
+-- Stores pending/completed async query jobs for long-running queries
+CREATE TABLE IF NOT EXISTS async_jobs (
+  id TEXT PRIMARY KEY,
+  cache_alias TEXT NOT NULL,
+  query TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'processing', 'complete', 'failed'
+  result TEXT, -- JSON-encoded QueryResult on success
+  error TEXT, -- Error message on failure
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  expires_at TEXT NOT NULL -- Auto-cleanup after TTL
+);
+
+-- Index for status polling
+CREATE INDEX IF NOT EXISTS idx_async_jobs_status ON async_jobs(status);
+
+-- Index for expiry cleanup
+CREATE INDEX IF NOT EXISTS idx_async_jobs_expires ON async_jobs(expires_at);

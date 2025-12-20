@@ -15,6 +15,7 @@ import {
   calculateCost,
   UrlAdapter,
   isGenericUrl,
+  MnemoError,
 } from '@mnemo/core';
 import {
   contextLoadSchema,
@@ -30,6 +31,20 @@ import {
 } from './schemas';
 import { stat } from 'node:fs/promises';
 
+/**
+ * Configuration for async query polling
+ */
+export interface AsyncQueryConfig {
+  /** Base URL for async endpoints (e.g., https://mnemo.logosflux.io) */
+  baseUrl: string;
+  /** Polling interval in ms (default: 1500) */
+  pollIntervalMs?: number;
+  /** Maximum wait time in ms (default: 300000 = 5 minutes) */
+  maxWaitMs?: number;
+  /** Optional auth token */
+  authToken?: string;
+}
+
 export interface ToolHandlerDeps {
   geminiClient: LLMClient;
   storage: CacheStorage;
@@ -38,6 +53,8 @@ export interface ToolHandlerDeps {
   urlAdapter?: UrlAdapter;
   usageLogger?: UsageLogger;
   writePassphrase?: string;
+  /** If set, context_query uses async polling instead of direct LLM calls */
+  asyncQueryConfig?: AsyncQueryConfig;
 }
 
 /**
@@ -232,6 +249,111 @@ export interface QueryResultWithTiming extends QueryResult {
 }
 
 /**
+ * Response from async status endpoint
+ */
+interface AsyncStatusResponse {
+  jobId: string;
+  status: 'pending' | 'processing' | 'complete' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+  result?: QueryResultWithTiming;
+  error?: string;
+}
+
+/**
+ * Query using async HTTP polling
+ */
+async function queryViaAsyncEndpoint(
+  config: AsyncQueryConfig,
+  alias: string,
+  query: string,
+  options: { maxTokens?: number; temperature?: number }
+): Promise<QueryResultWithTiming> {
+  const baseUrl = config.baseUrl.replace(/\/$/, '');
+  const pollInterval = config.pollIntervalMs ?? 1500;
+  const maxWait = config.maxWaitMs ?? 300000;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+
+  if (config.authToken) {
+    headers['Authorization'] = `Bearer ${config.authToken}`;
+  }
+
+  // Submit async query with wait=true for reliable completion
+  // This keeps the HTTP connection open until the query completes
+  const submitResponse = await fetch(`${baseUrl}/query/async`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      alias,
+      query,
+      maxTokens: options.maxTokens,
+      temperature: options.temperature,
+      wait: true, // Wait for result instead of polling
+    }),
+  });
+
+  if (!submitResponse.ok) {
+    const errorText = await submitResponse.text();
+    throw new MnemoError(
+      `Failed to submit async query: ${submitResponse.status} - ${errorText}`,
+      'ASYNC_SUBMIT_ERROR'
+    );
+  }
+
+  // With wait=true, the response contains the result directly
+  const response = await submitResponse.json() as AsyncStatusResponse;
+
+  // Check if we got an immediate result (wait=true mode)
+  if (response.status === 'complete' && response.result) {
+    return response.result;
+  }
+
+  if (response.status === 'failed') {
+    throw new MnemoError(response.error ?? 'Query failed', 'ASYNC_QUERY_FAILED');
+  }
+
+  // Fallback to polling if status is pending/processing (shouldn't happen with wait=true)
+  const jobId = response.jobId;
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxWait) {
+    const statusResponse = await fetch(`${baseUrl}/query/status/${jobId}`, { headers });
+
+    if (!statusResponse.ok) {
+      const errorText = await statusResponse.text();
+      throw new MnemoError(
+        `Failed to check job status: ${statusResponse.status} - ${errorText}`,
+        'ASYNC_STATUS_ERROR'
+      );
+    }
+
+    const status = await statusResponse.json() as AsyncStatusResponse;
+
+    switch (status.status) {
+      case 'complete':
+        if (!status.result) {
+          throw new MnemoError('Job completed but no result returned', 'ASYNC_RESULT_ERROR');
+        }
+        return status.result;
+
+      case 'failed':
+        throw new MnemoError(status.error ?? 'Query failed', 'ASYNC_QUERY_FAILED');
+
+      case 'pending':
+      case 'processing':
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        break;
+    }
+  }
+
+  throw new MnemoError(
+    `Query timed out after ${maxWait}ms`,
+    'ASYNC_TIMEOUT',
+    { jobId, maxWaitMs: maxWait }
+  );
+}
+
+/**
  * Query a cached context
  */
 export async function handleContextQuery(
@@ -240,7 +362,7 @@ export async function handleContextQuery(
 ): Promise<QueryResultWithTiming> {
   const startTime = Date.now();
   const input = contextQuerySchema.parse(rawInput);
-  const { geminiClient, storage } = deps;
+  const { geminiClient, storage, asyncQueryConfig } = deps;
 
   // Get cache by alias
   const cache = await storage.getByAlias(input.alias);
@@ -254,8 +376,33 @@ export async function handleContextQuery(
     throw new CacheNotFoundError(input.alias);
   }
 
-  // Query the cache
-  const result = await geminiClient.queryCache(cache.name, input.query, {
+  let result: QueryResult;
+
+  // Use async polling if configured, otherwise direct query
+  if (asyncQueryConfig) {
+    // Async polling mode - for external MCP clients
+    const asyncResult = await queryViaAsyncEndpoint(
+      asyncQueryConfig,
+      input.alias,
+      input.query,
+      { maxTokens: input.maxTokens, temperature: input.temperature }
+    );
+
+    // Log usage
+    if (deps.usageLogger) {
+      await deps.usageLogger.log({
+        cacheId: cache.name,
+        operation: 'query',
+        tokensUsed: asyncResult.tokensUsed,
+        cachedTokensUsed: asyncResult.cachedTokensUsed,
+      });
+    }
+
+    return asyncResult;
+  }
+
+  // Direct query mode - for internal use
+  result = await geminiClient.queryCache(cache.name, input.query, {
     maxOutputTokens: input.maxTokens,
     temperature: input.temperature,
   });
