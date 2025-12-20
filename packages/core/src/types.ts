@@ -82,6 +82,25 @@ export const QueryResultSchema = z.object({
 export type QueryResult = z.infer<typeof QueryResultSchema>;
 
 // ============================================================================
+// Cache Expired Response (returned when querying expired cache)
+// ============================================================================
+
+export const CacheExpiredResponseSchema = z.object({
+  /** Status indicator - always 'expired' for this response type */
+  status: z.literal('expired'),
+  /** Required action for the caller */
+  action_required: z.literal('context_refresh'),
+  /** The cache alias that has expired */
+  alias: z.string(),
+  /** Human-readable message with instructions */
+  message: z.string(),
+  /** ISO timestamp when the cache expired */
+  expired_at: z.string(),
+});
+
+export type CacheExpiredResponse = z.infer<typeof CacheExpiredResponseSchema>;
+
+// ============================================================================
 // Source Types
 // ============================================================================
 

@@ -8,6 +8,7 @@ import {
   type UsageLogger,
   type UsageStats,
   type LoadedSource,
+  type CacheExpiredResponse,
   CacheNotFoundError,
   isUrl,
   isGitHubUrl,
@@ -353,13 +354,18 @@ async function queryViaAsyncEndpoint(
   );
 }
 
+/** Response type for expired caches with timing info */
+export interface CacheExpiredResponseWithTiming extends CacheExpiredResponse {
+  timing: QueryTiming;
+}
+
 /**
  * Query a cached context
  */
 export async function handleContextQuery(
   deps: ToolHandlerDeps,
   rawInput: unknown
-): Promise<QueryResultWithTiming> {
+): Promise<QueryResultWithTiming | CacheExpiredResponseWithTiming> {
   const startTime = Date.now();
   const input = contextQuerySchema.parse(rawInput);
   const { geminiClient, storage, asyncQueryConfig } = deps;
@@ -370,10 +376,23 @@ export async function handleContextQuery(
     throw new CacheNotFoundError(input.alias);
   }
 
-  // Check if expired
+  // Check if expired - return structured response instead of throwing
   if (new Date() > cache.expiresAt) {
-    await storage.deleteByAlias(input.alias);
-    throw new CacheNotFoundError(input.alias);
+    // Do NOT delete metadata - keep it so context_refresh knows the source
+    const queryMs = Date.now() - startTime;
+    return {
+      status: 'expired',
+      action_required: 'context_refresh',
+      alias: input.alias,
+      message: `Cache '${input.alias}' has expired. Call context_refresh("${input.alias}") to reload it. DO NOT attempt to load content directly.`,
+      expired_at: cache.expiresAt.toISOString(),
+      timing: {
+        queryMs,
+        contextTokens: 0,
+        outputTokens: 0,
+        tokensPerSecond: 0,
+      },
+    };
   }
 
   let result: QueryResult;
@@ -430,34 +449,23 @@ export async function handleContextQuery(
 }
 
 /**
- * List all active caches (filters out expired caches and cleans them up)
+ * List all caches (includes expired caches with flag for context_refresh)
  */
 export async function handleContextList(
   deps: ToolHandlerDeps
-): Promise<{ caches: Array<{ alias: string; tokenCount: number; expiresAt: string; source: string }>; expiredCount: number }> {
+): Promise<{ caches: Array<{ alias: string; tokenCount: number; expiresAt: string; source: string; expired: boolean }> }> {
   const { storage } = deps;
   const allCaches = await storage.list();
   const now = new Date();
 
-  // Separate active and expired caches
-  const activeCaches = allCaches.filter((c) => c.expiresAt > now);
-  const expiredCaches = allCaches.filter((c) => c.expiresAt <= now);
-
-  // Clean up expired caches in background (don't await to avoid slowing response)
-  if (expiredCaches.length > 0) {
-    Promise.all(expiredCaches.map((c) => storage.deleteByAlias(c.alias))).catch((err) =>
-      console.error('Failed to clean up expired caches:', err)
-    );
-  }
-
   return {
-    caches: activeCaches.map((c) => ({
+    caches: allCaches.map((c) => ({
       alias: c.alias,
       tokenCount: c.tokenCount,
       expiresAt: c.expiresAt.toISOString(),
       source: c.source,
+      expired: c.expiresAt <= now,
     })),
-    expiredCount: expiredCaches.length,
   };
 }
 
