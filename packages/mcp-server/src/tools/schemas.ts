@@ -26,7 +26,7 @@ export type ContextLoadInput = z.infer<typeof contextLoadSchema>;
 export const contextQuerySchema = z.object({
   alias: z.string().describe('Cache alias to query'),
   query: z.string().describe('Question or instruction'),
-  maxTokens: z.number().optional().describe('Maximum tokens in response'),
+  maxTokens: z.number().default(1024).describe('Maximum tokens in response (default: 1024)'),
   temperature: z.number().min(0).max(2).optional().describe('Temperature for generation'),
 });
 
