@@ -25,6 +25,7 @@ import {
   handleContextStats,
   handleContextRefresh,
   type ToolHandlerDeps,
+  type AsyncQueryConfig,
 } from './tools/handlers';
 
 export interface MnemoMCPServerConfig {
@@ -35,6 +36,8 @@ export interface MnemoMCPServerConfig {
   urlAdapter?: UrlAdapter;
   usageLogger?: UsageLogger;
   writePassphrase?: string;
+  /** If set, context_query uses async HTTP polling instead of direct LLM calls */
+  asyncQueryConfig?: AsyncQueryConfig;
 }
 
 /**
@@ -53,6 +56,7 @@ export class MnemoMCPServer {
       urlAdapter: config.urlAdapter ?? new UrlAdapter(),
       usageLogger: config.usageLogger,
       writePassphrase: config.writePassphrase,
+      asyncQueryConfig: config.asyncQueryConfig,
     };
   }
 

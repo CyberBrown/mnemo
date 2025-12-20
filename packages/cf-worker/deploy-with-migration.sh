@@ -9,6 +9,13 @@ bunx wrangler d1 execute mnemo-cache --remote --command "CREATE TABLE IF NOT EXI
 
 bunx wrangler d1 execute mnemo-cache --remote --command "CREATE INDEX IF NOT EXISTS idx_cache_content_expires ON cache_content(expires_at);"
 
+echo "Running D1 migration for async_jobs table..."
+bunx wrangler d1 execute mnemo-cache --remote --command "CREATE TABLE IF NOT EXISTS async_jobs (id TEXT PRIMARY KEY, cache_alias TEXT NOT NULL, query TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', result TEXT, error TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT NOT NULL);"
+
+bunx wrangler d1 execute mnemo-cache --remote --command "CREATE INDEX IF NOT EXISTS idx_async_jobs_status ON async_jobs(status);"
+
+bunx wrangler d1 execute mnemo-cache --remote --command "CREATE INDEX IF NOT EXISTS idx_async_jobs_expires ON async_jobs(expires_at);"
+
 echo "Migration complete. Deploying to Cloudflare..."
 bun run deploy
 

@@ -409,6 +409,186 @@ app.post('/tools/:toolName', rateLimitMiddleware(), async (c) => {
   }
 });
 
+// ============================================================================
+// Async Query Endpoints
+// ============================================================================
+
+// Submit an async query - returns immediately with jobId
+// The actual processing happens via waitUntil (for short tasks) or can be polled
+app.post('/query/async', rateLimitMiddleware(), async (c) => {
+  const jobStore = new D1AsyncJobStore(c.env.DB);
+
+  try {
+    const body = await c.req.json<{
+      alias: string;
+      query: string;
+      maxTokens?: number;
+      temperature?: number;
+      wait?: boolean; // If true, wait for result instead of returning immediately
+    }>();
+
+    if (!body.alias || !body.query) {
+      return c.json({ error: 'Missing required fields: alias and query' }, 400);
+    }
+
+    // Create job with 10 minute expiry
+    const jobId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await jobStore.create({
+      id: jobId,
+      cacheAlias: body.alias,
+      query: body.query,
+      status: 'pending',
+      expiresAt,
+    });
+
+    const server = createMCPServer(c.env);
+
+    // If wait=true, process synchronously and return result
+    if (body.wait) {
+      await processAsyncQuery(jobStore, server, jobId, body.alias, body.query, {
+        maxTokens: body.maxTokens,
+        temperature: body.temperature,
+      });
+
+      const job = await jobStore.get(jobId);
+      if (job?.status === 'complete' && job.result) {
+        return c.json({
+          jobId,
+          status: 'complete',
+          result: JSON.parse(job.result),
+        });
+      } else if (job?.status === 'failed') {
+        return c.json({
+          jobId,
+          status: 'failed',
+          error: job.error,
+        }, 500);
+      }
+    }
+
+    // Otherwise, start processing in background using waitUntil
+    // Note: waitUntil may not complete for very long tasks (2+ minutes)
+    c.executionCtx.waitUntil(
+      processAsyncQuery(jobStore, server, jobId, body.alias, body.query, {
+        maxTokens: body.maxTokens,
+        temperature: body.temperature,
+      })
+    );
+
+    return c.json({
+      jobId,
+      status: 'pending',
+      statusUrl: `/query/status/${jobId}`,
+    }, 202);
+  } catch (error) {
+    console.error('Failed to create async job:', error);
+    return c.json({ error: 'Failed to create async job' }, 500);
+  }
+});
+
+// Poll for async query result
+app.get('/query/status/:jobId', async (c) => {
+  const jobId = c.req.param('jobId');
+  const jobStore = new D1AsyncJobStore(c.env.DB);
+
+  try {
+    const job = await jobStore.get(jobId);
+
+    if (!job) {
+      return c.json({ error: 'Job not found' }, 404);
+    }
+
+    // Check if expired
+    if (new Date() > job.expiresAt) {
+      return c.json({ error: 'Job expired' }, 410);
+    }
+
+    const response: Record<string, unknown> = {
+      jobId: job.id,
+      status: job.status,
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString(),
+    };
+
+    if (job.status === 'complete' && job.result) {
+      response.result = JSON.parse(job.result);
+    } else if (job.status === 'failed' && job.error) {
+      response.error = job.error;
+    }
+
+    return c.json(response);
+  } catch (error) {
+    console.error('Failed to get job status:', error);
+    return c.json({ error: 'Failed to get job status' }, 500);
+  }
+});
+
+/**
+ * Process async query in background
+ */
+async function processAsyncQuery(
+  jobStore: D1AsyncJobStore,
+  server: MnemoMCPServer,
+  jobId: string,
+  alias: string,
+  query: string,
+  options: { maxTokens?: number; temperature?: number }
+): Promise<void> {
+  try {
+    // Mark as processing
+    await jobStore.updateStatus(jobId, 'processing');
+
+    // Execute the query via MCP server
+    const response = await server.handleRequest({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'context_query',
+        arguments: {
+          alias,
+          query,
+          maxTokens: options.maxTokens,
+          temperature: options.temperature,
+        },
+      },
+    });
+
+    // Check for errors in response
+    if ('error' in response && response.error) {
+      await jobStore.updateStatus(jobId, 'failed', undefined, response.error.message);
+      return;
+    }
+
+    // Extract result from MCP response
+    if ('result' in response && response.result) {
+      const mcpResult = response.result as { content: Array<{ type: string; text: string }>; isError?: boolean };
+
+      if (mcpResult.isError) {
+        const errorText = mcpResult.content[0]?.text ?? 'Unknown error';
+        await jobStore.updateStatus(jobId, 'failed', undefined, errorText);
+        return;
+      }
+
+      // Parse the JSON result from MCP response
+      const resultText = mcpResult.content[0]?.text;
+      if (resultText) {
+        await jobStore.updateStatus(jobId, 'complete', resultText);
+      } else {
+        await jobStore.updateStatus(jobId, 'failed', undefined, 'Empty response from query');
+      }
+    } else {
+      await jobStore.updateStatus(jobId, 'failed', undefined, 'Invalid response format');
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Async query failed:', errorMessage);
+    await jobStore.updateStatus(jobId, 'failed', undefined, errorMessage);
+  }
+}
+
 // Usage stats endpoint (for monitoring)
 app.get('/stats', async (c) => {
   const kv = c.env.RATE_LIMIT_KV;
@@ -670,6 +850,99 @@ class D1ContentStore implements ContentStore {
       .bind(key)
       .run();
     return (result.meta?.changes ?? 0) > 0;
+  }
+}
+
+// ============================================================================
+// D1 Usage Logger Implementation
+// ============================================================================
+
+// ============================================================================
+// Async Job Types and Storage
+// ============================================================================
+
+type AsyncJobStatus = 'pending' | 'processing' | 'complete' | 'failed';
+
+interface AsyncJob {
+  id: string;
+  cacheAlias: string;
+  query: string;
+  status: AsyncJobStatus;
+  result?: string; // JSON-encoded result
+  error?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  expiresAt: Date;
+}
+
+interface AsyncJobStore {
+  create(job: Omit<AsyncJob, 'createdAt' | 'updatedAt'>): Promise<string>;
+  get(id: string): Promise<AsyncJob | null>;
+  updateStatus(id: string, status: AsyncJobStatus, result?: string, error?: string): Promise<void>;
+  cleanupExpired(): Promise<number>;
+}
+
+class D1AsyncJobStore implements AsyncJobStore {
+  constructor(private db: D1Database) {}
+
+  async create(job: Omit<AsyncJob, 'createdAt' | 'updatedAt'>): Promise<string> {
+    await this.db
+      .prepare(
+        `INSERT INTO async_jobs (id, cache_alias, query, status, expires_at)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .bind(job.id, job.cacheAlias, job.query, job.status, job.expiresAt.toISOString())
+      .run();
+    return job.id;
+  }
+
+  async get(id: string): Promise<AsyncJob | null> {
+    const result = await this.db
+      .prepare('SELECT * FROM async_jobs WHERE id = ?')
+      .bind(id)
+      .first<{
+        id: string;
+        cache_alias: string;
+        query: string;
+        status: string;
+        result: string | null;
+        error: string | null;
+        created_at: string;
+        updated_at: string;
+        expires_at: string;
+      }>();
+
+    if (!result) return null;
+
+    return {
+      id: result.id,
+      cacheAlias: result.cache_alias,
+      query: result.query,
+      status: result.status as AsyncJobStatus,
+      result: result.result ?? undefined,
+      error: result.error ?? undefined,
+      createdAt: new Date(result.created_at),
+      updatedAt: new Date(result.updated_at),
+      expiresAt: new Date(result.expires_at),
+    };
+  }
+
+  async updateStatus(id: string, status: AsyncJobStatus, result?: string, error?: string): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE async_jobs
+         SET status = ?, result = ?, error = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+      )
+      .bind(status, result ?? null, error ?? null, id)
+      .run();
+  }
+
+  async cleanupExpired(): Promise<number> {
+    const result = await this.db
+      .prepare('DELETE FROM async_jobs WHERE expires_at < CURRENT_TIMESTAMP')
+      .run();
+    return result.meta?.changes ?? 0;
   }
 }
 
