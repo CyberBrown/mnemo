@@ -46,6 +46,14 @@ import {
 import { stat } from 'node:fs/promises';
 
 /**
+ * Default system instruction for code analysis caches
+ */
+const DEFAULT_SYSTEM_INSTRUCTION =
+  'You are a code analysis assistant. Answer questions about this codebase directly and concisely. ' +
+  'Avoid markdown tables, excessive formatting, and verbose explanations unless specifically requested. ' +
+  'Lead with the direct answer, then add brief context only if necessary.';
+
+/**
  * Configuration for async query polling
  */
 export interface AsyncQueryConfig {
@@ -224,7 +232,7 @@ export async function handleContextLoad(
     input.alias,
     {
       ttl: input.ttl,
-      systemInstruction: input.systemInstruction,
+      systemInstruction: input.systemInstruction ?? DEFAULT_SYSTEM_INSTRUCTION,
     }
   );
 
@@ -841,7 +849,7 @@ export async function handleContextRefresh(
     input.alias,
     {
       ttl,
-      systemInstruction: input.systemInstruction,
+      systemInstruction: input.systemInstruction ?? DEFAULT_SYSTEM_INSTRUCTION,
     }
   );
 
