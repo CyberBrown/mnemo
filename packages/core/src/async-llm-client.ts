@@ -91,6 +91,17 @@ export class AsyncLLMClient implements LLMClient {
   }
 
   /**
+   * Query without a cache (for RAG-style queries with custom context)
+   * Delegates to wrapped client
+   */
+  query(
+    query: string,
+    options?: QueryOptions & { systemInstruction?: string; context?: string }
+  ): Promise<QueryResult> {
+    return this.wrapped.query(query, options);
+  }
+
+  /**
    * Query cache using async HTTP polling
    * This avoids timeouts on large context queries by:
    * 1. Submitting the query to POST /query/async

@@ -143,12 +143,13 @@ export class LocalLLMClient implements LLMClient {
     // Generate a local cache ID
     const cacheId = `local:${alias}:${Date.now()}`;
 
-    // Store the content with optional system instruction prepended
-    const storedContent = options.systemInstruction
-      ? `<system>\n${options.systemInstruction}\n</system>\n\n${content}`
-      : content;
+    // Store content and system instruction separately using a JSON wrapper
+    const storedData = JSON.stringify({
+      systemInstruction: options.systemInstruction ?? null,
+      content,
+    });
 
-    await this.contentStore.set(cacheId, storedContent, ttl);
+    await this.contentStore.set(cacheId, storedData, ttl);
 
     const now = new Date();
     return {
@@ -172,8 +173,8 @@ export class LocalLLMClient implements LLMClient {
     options: QueryOptions = {}
   ): Promise<QueryResult> {
     // Retrieve stored content
-    const cachedContent = await this.contentStore.get(cacheName);
-    if (!cachedContent) {
+    const cachedData = await this.contentStore.get(cacheName);
+    if (!cachedData) {
       throw new MnemoError(
         `Local cache not found or expired: ${cacheName}`,
         'CACHE_NOT_FOUND',
@@ -181,17 +182,47 @@ export class LocalLLMClient implements LLMClient {
       );
     }
 
+    // Parse stored data - handle both new JSON format and legacy plain text
+    let systemInstruction: string | null = null;
+    let content: string;
+    try {
+      const parsed = JSON.parse(cachedData);
+      systemInstruction = parsed.systemInstruction;
+      content = parsed.content;
+    } catch {
+      // Legacy format: plain text content
+      content = cachedData;
+    }
+
     // Build messages for the chat completion
-    const messages: ChatCompletionRequest['messages'] = [
-      {
-        role: 'system',
-        content: `You are a helpful assistant. The user has provided the following context for you to reference:\n\n${cachedContent}`,
-      },
-      {
-        role: 'user',
-        content: query,
-      },
-    ];
+    // Use separate messages: system instruction, context as user message, then query
+    const messages: ChatCompletionRequest['messages'] = [];
+
+    // System instruction (short, will be respected)
+    const effectiveInstruction = systemInstruction ??
+      'Be extremely concise. Answer in 1-3 sentences. No markdown, no bullet points, no headers.';
+    messages.push({
+      role: 'system',
+      content: effectiveInstruction,
+    });
+
+    // Context as a user message (so it doesn't dilute the system instruction)
+    messages.push({
+      role: 'user',
+      content: `Here is the codebase context:\n\n${content}`,
+    });
+
+    // Assistant acknowledgment
+    messages.push({
+      role: 'assistant',
+      content: 'I have the codebase context. I will answer concisely without markdown formatting.',
+    });
+
+    // Actual query with reminder
+    messages.push({
+      role: 'user',
+      content: `${query}\n\n(Remember: 1-3 sentences, no markdown)`,
+    });
 
     const requestBody: ChatCompletionRequest = {
       model: this.model,
@@ -223,13 +254,13 @@ export class LocalLLMClient implements LLMClient {
       const data: ChatCompletionResponse = await response.json();
 
       const responseText = data.choices[0]?.message ? extractResponseText(data.choices[0].message) : '';
-      const promptTokens = data.usage?.prompt_tokens ?? this.estimateTokens(cachedContent + query);
+      const promptTokens = data.usage?.prompt_tokens ?? this.estimateTokens(content + query);
       const completionTokens = data.usage?.completion_tokens ?? this.estimateTokens(responseText);
 
       return {
         response: responseText,
         tokensUsed: promptTokens + completionTokens,
-        cachedTokensUsed: this.estimateTokens(cachedContent), // All context tokens are "cached" (stored locally)
+        cachedTokensUsed: this.estimateTokens(content), // All context tokens are "cached" (stored locally)
         model: this.model,
       };
     } catch (error) {
@@ -284,6 +315,17 @@ export class LocalLLMClient implements LLMClient {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Query without a cache (for RAG-style queries with custom context)
+   * Implements the LLMClient interface
+   */
+  async query(
+    query: string,
+    options: QueryOptions & { systemInstruction?: string; context?: string } = {}
+  ): Promise<QueryResult> {
+    return this.queryDirect(options.context ?? '', query, options);
   }
 
   /**

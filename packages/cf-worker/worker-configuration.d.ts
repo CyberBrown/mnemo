@@ -5,6 +5,14 @@ interface Env {
 	ENVIRONMENT: "production";
 	STORAGE: R2Bucket;
 	DB: D1Database;
+	RATE_LIMIT_KV: KVNamespace;
+	AI: Ai;
+	VECTORIZE: VectorizeIndex;
 	GEMINI_API_KEY: string;
 	MNEMO_AUTH_TOKEN?: string;
+	RESEND_API_KEY?: string;
+	WRITE_PASSPHRASE?: string;
+	ALERT_EMAIL?: string;
+	DAILY_REQUEST_LIMIT?: string;
+	DAILY_TOKEN_LIMIT?: string;
 }

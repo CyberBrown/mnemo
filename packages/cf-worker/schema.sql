@@ -72,3 +72,54 @@ CREATE INDEX IF NOT EXISTS idx_async_jobs_status ON async_jobs(status);
 
 -- Index for expiry cleanup
 CREATE INDEX IF NOT EXISTS idx_async_jobs_expires ON async_jobs(expires_at);
+
+-- ============================================================================
+-- Vector Index Metadata (for RAG-based context querying)
+-- ============================================================================
+
+-- Track indexed repos (separate from cache metadata)
+-- Vectors are stored in Cloudflare Vectorize, this just tracks metadata
+CREATE TABLE IF NOT EXISTS repo_indexes (
+  id TEXT PRIMARY KEY,
+  alias TEXT UNIQUE NOT NULL,
+  source TEXT NOT NULL,              -- Original GitHub URL or local path
+  chunk_count INTEGER DEFAULT 0,     -- Number of chunks in Vectorize
+  total_tokens INTEGER DEFAULT 0,    -- Estimated total tokens across chunks
+  file_count INTEGER DEFAULT 0,      -- Number of files indexed
+  indexed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  expires_at TEXT,                   -- Optional: auto-cleanup old indexes
+  status TEXT DEFAULT 'active'       -- 'active', 'indexing', 'failed'
+);
+
+-- Index for alias lookups (most common)
+CREATE INDEX IF NOT EXISTS idx_repo_indexes_alias ON repo_indexes(alias);
+
+-- Index for status filtering
+CREATE INDEX IF NOT EXISTS idx_repo_indexes_status ON repo_indexes(status);
+
+-- Index for expiry cleanup
+CREATE INDEX IF NOT EXISTS idx_repo_indexes_expires ON repo_indexes(expires_at);
+
+-- ============================================================================
+-- Chunk Content Storage (for RAG retrieval)
+-- ============================================================================
+
+-- Store actual chunk content for retrieval during queries
+-- Vector IDs reference chunks stored here
+CREATE TABLE IF NOT EXISTS repo_chunks (
+  id TEXT PRIMARY KEY,              -- Same as vector ID in Vectorize
+  repo_alias TEXT NOT NULL,         -- For bulk deletion
+  file_path TEXT NOT NULL,          -- Source file path
+  chunk_index INTEGER NOT NULL,     -- Position within file
+  content TEXT NOT NULL,            -- Actual chunk content
+  start_line INTEGER,               -- Line range start
+  end_line INTEGER,                 -- Line range end
+  token_count INTEGER DEFAULT 0,    -- Estimated tokens
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Index for repo-based operations (list, delete)
+CREATE INDEX IF NOT EXISTS idx_repo_chunks_alias ON repo_chunks(repo_alias);
+
+-- Index for fetching chunks by IDs (primary lookup pattern)
+CREATE INDEX IF NOT EXISTS idx_repo_chunks_file ON repo_chunks(repo_alias, file_path);

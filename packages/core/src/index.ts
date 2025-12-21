@@ -22,3 +22,9 @@ export { SourceLoader } from './source-loader';
 
 // Adapters (v0.2)
 export * from './adapters';
+
+// Chunker (v0.3 - RAG support)
+export * from './chunker';
+
+// Vectorize Client (v0.3 - RAG support)
+export * from './vectorize-client';

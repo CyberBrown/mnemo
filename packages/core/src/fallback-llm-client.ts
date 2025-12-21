@@ -217,6 +217,43 @@ export class FallbackLLMClient implements LLMClient {
   }
 
   /**
+   * Query without a cache (for RAG-style queries)
+   * Uses primary model with fallback on error
+   */
+  async query(
+    query: string,
+    options: QueryOptions & { systemInstruction?: string; context?: string } = {}
+  ): Promise<QueryResult> {
+    // Check if primary is available
+    const primaryAvailable = await this.primary.isAvailable();
+    if (!primaryAvailable) {
+      const permitted = await this.requestFallbackPermission(
+        'local_unavailable',
+        'Local model not responding for RAG query'
+      );
+      if (!permitted) {
+        throw new FallbackDeniedError('local_unavailable');
+      }
+      return this.fallback.query(query, options);
+    }
+
+    // Try primary
+    try {
+      return await this.primary.query(query, options);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const permitted = await this.requestFallbackPermission(
+        'local_error',
+        `RAG query error: ${errorMessage}`
+      );
+      if (!permitted) {
+        throw new FallbackDeniedError('local_error');
+      }
+      return this.fallback.query(query, options);
+    }
+  }
+
+  /**
    * Get status of both providers
    */
   async getProviderStatus(): Promise<{

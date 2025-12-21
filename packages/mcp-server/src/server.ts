@@ -5,6 +5,10 @@ import {
   UrlAdapter,
   type CacheStorage,
   type UsageLogger,
+  type VectorizeClient,
+  type EmbeddingClient,
+  type RepoIndexStorage,
+  type ChunkStorage,
   MnemoError,
 } from '@mnemo/core';
 import {
@@ -24,6 +28,7 @@ import {
   handleContextEvict,
   handleContextStats,
   handleContextRefresh,
+  handleContextIndex,
   type ToolHandlerDeps,
   type AsyncQueryConfig,
 } from './tools/handlers';
@@ -38,6 +43,11 @@ export interface MnemoMCPServerConfig {
   writePassphrase?: string;
   /** If set, context_query uses async HTTP polling instead of direct LLM calls */
   asyncQueryConfig?: AsyncQueryConfig;
+  // RAG support (v0.3)
+  vectorizeClient?: VectorizeClient;
+  embeddingClient?: EmbeddingClient;
+  repoIndexStorage?: RepoIndexStorage;
+  chunkStorage?: ChunkStorage;
 }
 
 /**
@@ -57,6 +67,11 @@ export class MnemoMCPServer {
       usageLogger: config.usageLogger,
       writePassphrase: config.writePassphrase,
       asyncQueryConfig: config.asyncQueryConfig,
+      // RAG support
+      vectorizeClient: config.vectorizeClient,
+      embeddingClient: config.embeddingClient,
+      repoIndexStorage: config.repoIndexStorage,
+      chunkStorage: config.chunkStorage,
     };
   }
 
@@ -158,6 +173,9 @@ export class MnemoMCPServer {
           break;
         case 'context_refresh':
           result = await handleContextRefresh(this.deps, args);
+          break;
+        case 'context_index':
+          result = await handleContextIndex(this.deps, args);
           break;
         default:
           throw new MethodNotFoundError(`Unknown tool: ${toolName}`);
