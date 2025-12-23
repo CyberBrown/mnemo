@@ -6,12 +6,13 @@ interface Env {
 	STORAGE: R2Bucket;
 	DB: D1Database;
 	RATE_LIMIT_KV: KVNamespace;
-	GEMINI_API_KEY?: string;
+	AI: Ai;
+	VECTORIZE: VectorizeIndex;
+	GEMINI_API_KEY: string;
 	MNEMO_AUTH_TOKEN?: string;
+	RESEND_API_KEY?: string;
 	WRITE_PASSPHRASE?: string;
-	ENABLE_GEMINI_FALLBACK?: string;
 	ALERT_EMAIL?: string;
 	DAILY_REQUEST_LIMIT?: string;
 	DAILY_TOKEN_LIMIT?: string;
-	QUERY_WORKFLOW: Workflow;
 }

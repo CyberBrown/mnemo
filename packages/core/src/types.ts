@@ -82,6 +82,25 @@ export const QueryResultSchema = z.object({
 export type QueryResult = z.infer<typeof QueryResultSchema>;
 
 // ============================================================================
+// Cache Expired Response (returned when querying expired cache)
+// ============================================================================
+
+export const CacheExpiredResponseSchema = z.object({
+  /** Status indicator - always 'expired' for this response type */
+  status: z.literal('expired'),
+  /** Required action for the caller */
+  action_required: z.literal('context_refresh'),
+  /** The cache alias that has expired */
+  alias: z.string(),
+  /** Human-readable message with instructions */
+  message: z.string(),
+  /** ISO timestamp when the cache expired */
+  expired_at: z.string(),
+});
+
+export type CacheExpiredResponse = z.infer<typeof CacheExpiredResponseSchema>;
+
+// ============================================================================
 // Source Types
 // ============================================================================
 
@@ -268,8 +287,8 @@ export class TokenLimitError extends MnemoError {
 // ============================================================================
 
 export const MnemoConfigSchema = z.object({
-  /** Gemini API key (required for fallback) */
-  geminiApiKey: z.string(),
+  /** Gemini API key (optional - only needed for Gemini fallback) */
+  geminiApiKey: z.string().optional(),
   /** Default Gemini model for caching */
   defaultModel: z.string().default('gemini-2.0-flash-001'),
   /** Default TTL in seconds */

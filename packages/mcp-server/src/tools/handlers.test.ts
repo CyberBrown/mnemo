@@ -206,7 +206,7 @@ describe('handleContextLoad', () => {
     const inputTooHigh = {
       source: '/test',
       alias: 'test',
-      ttl: 90000, // Max is 86400
+      ttl: 700000, // Max is 604800 (1 week)
     };
 
     await expect(handleContextLoad(deps, inputTooHigh)).rejects.toThrow();
@@ -309,8 +309,15 @@ describe('handleContextQuery', () => {
       query: 'What files are in this repo?',
     });
 
-    expect(result.response).toContain('Mock response');
-    expect(result.tokensUsed).toBeGreaterThan(0);
+    // Type guard: check it's a valid query result, not an expired cache response
+    expect('response' in result).toBe(true);
+    if ('response' in result) {
+      expect(result.response).toContain('Mock response');
+      // Check for tokensUsed (standard query) or chunksUsed (RAG query)
+      if ('tokensUsed' in result) {
+        expect(result.tokensUsed).toBeGreaterThan(0);
+      }
+    }
     expect(deps.geminiClient.queryCache).toHaveBeenCalledTimes(1);
   });
 
@@ -334,7 +341,7 @@ describe('handleContextQuery', () => {
     await expect(handleContextQuery(deps, input)).rejects.toThrow(CacheNotFoundError);
   });
 
-  test('throws CacheNotFoundError for expired cache', async () => {
+  test('returns structured expired response for expired cache', async () => {
     const deps = createMockDeps();
     const storage = deps.storage as any;
 
@@ -356,8 +363,18 @@ describe('handleContextQuery', () => {
       query: 'test query',
     };
 
-    await expect(handleContextQuery(deps, input)).rejects.toThrow(CacheNotFoundError);
-    expect(deps.storage.deleteByAlias).toHaveBeenCalledWith('expired');
+    const result = await handleContextQuery(deps, input);
+
+    // Should return structured response, not throw
+    expect(result).toHaveProperty('status', 'expired');
+    expect(result).toHaveProperty('action_required', 'context_refresh');
+    expect(result).toHaveProperty('alias', 'expired');
+    expect(result).toHaveProperty('message');
+    expect(result).toHaveProperty('expired_at');
+    expect(result).toHaveProperty('timing');
+
+    // Should NOT delete metadata (so context_refresh can find the source)
+    expect(deps.storage.deleteByAlias).not.toHaveBeenCalled();
   });
 
   test('passes query options to Gemini client', async () => {
@@ -467,7 +484,33 @@ describe('handleContextList', () => {
     expect(result.caches[0]).toHaveProperty('tokenCount');
     expect(result.caches[0]).toHaveProperty('expiresAt');
     expect(result.caches[0]).toHaveProperty('source');
+    expect(result.caches[0]).toHaveProperty('expired');
     expect(result.caches[0].expiresAt).toMatch(/^\d{4}-\d{2}-\d{2}T/); // ISO format
+    expect(result.caches[0].expired).toBe(false); // Active cache
+  });
+
+  test('shows expired caches with expired flag', async () => {
+    const deps = createMockDeps();
+    const storage = deps.storage as any;
+
+    // Manually insert an expired cache
+    const expiredCache = {
+      name: 'cache-expired',
+      alias: 'expired-cache',
+      tokenCount: 1000,
+      createdAt: new Date(Date.now() - 7200000), // 2 hours ago
+      expiresAt: new Date(Date.now() - 3600000), // Expired 1 hour ago
+      source: '/test',
+      model: 'gemini-2.0-flash-001',
+    };
+
+    await storage.save(expiredCache);
+
+    const result = await handleContextList(deps);
+
+    const expiredEntry = result.caches.find(c => c.alias === 'expired-cache');
+    expect(expiredEntry).toBeTruthy();
+    expect(expiredEntry?.expired).toBe(true);
   });
 });
 
@@ -1260,7 +1303,7 @@ describe('handleContextRefresh', () => {
     ).rejects.toThrow();
 
     await expect(
-      handleContextRefresh(deps, { alias: 'test', ttl: 90000 })
+      handleContextRefresh(deps, { alias: 'test', ttl: 700000 }) // Max is 604800 (1 week)
     ).rejects.toThrow();
   });
 

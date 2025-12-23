@@ -17,6 +17,17 @@ import {
   MnemoConfigSchema,
   calculateCost,
   UrlAdapter,
+  // RAG support
+  type VectorizeClient,
+  type EmbeddingClient,
+  type RepoIndexStorage,
+  type RepoIndexMetadata,
+  type Vector,
+  type VectorMatch,
+  type VectorQueryResult,
+  type VectorizeQueryOptions,
+  type ChunkStorage,
+  type StoredChunk,
 } from '@mnemo/core';
 import { MnemoMCPServer, toolDefinitions } from '@mnemo/mcp-server';
 
@@ -297,14 +308,11 @@ app.get('/health', async (c) => {
     localModelAvailable = false;
   }
 
-  const geminiFallbackEnabled = c.env.ENABLE_GEMINI_FALLBACK === 'true' && !!c.env.GEMINI_API_KEY;
-
   return c.json({
     status: 'ok',
     service: 'mnemo',
     version: '0.2.0',
     environment: c.env.ENVIRONMENT,
-    mode: geminiFallbackEnabled ? 'fallback' : 'local-only',
     models: {
       primary: {
         name: LOCAL_MODEL_NAME,
@@ -313,7 +321,7 @@ app.get('/health', async (c) => {
       },
       fallback: {
         name: 'gemini-2.0-flash-001',
-        enabled: geminiFallbackEnabled,
+        available: !!c.env.GEMINI_API_KEY,
       },
     },
   });
@@ -413,97 +421,184 @@ app.post('/tools/:toolName', rateLimitMiddleware(), async (c) => {
 });
 
 // ============================================================================
-// Async Query Endpoints (for long-running queries)
+// Async Query Endpoints
 // ============================================================================
 
-// Submit async query - returns job ID immediately
+// Submit an async query - returns immediately with jobId
+// The actual processing happens via waitUntil (for short tasks) or can be polled
 app.post('/query/async', rateLimitMiddleware(), async (c) => {
+  const jobStore = new D1AsyncJobStore(c.env.DB);
+
   try {
-    const { alias, query, maxTokens, temperature } = await c.req.json();
+    const body = await c.req.json<{
+      alias: string;
+      query: string;
+      maxTokens?: number;
+      temperature?: number;
+      wait?: boolean; // If true, wait for result instead of returning immediately
+    }>();
 
-    if (!alias || !query) {
-      return c.json({ error: 'alias and query are required' }, 400);
+    if (!body.alias || !body.query) {
+      return c.json({ error: 'Missing required fields: alias and query' }, 400);
     }
 
-    // Verify cache exists
-    const cache = await c.env.DB.prepare(
-      'SELECT gemini_cache_name FROM caches WHERE alias = ?'
-    ).bind(alias).first();
-
-    if (!cache) {
-      return c.json({ error: `Cache not found: ${alias}` }, 404);
-    }
-
-    // Generate job ID
+    // Create job with 10 minute expiry
     const jobId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-    // Create workflow instance
-    const instance = await c.env.QUERY_WORKFLOW.create({
+    await jobStore.create({
       id: jobId,
-      params: { jobId, alias, query, maxTokens, temperature },
+      cacheAlias: body.alias,
+      query: body.query,
+      status: 'pending',
+      expiresAt,
     });
 
-    // Store job in D1
-    await c.env.DB.prepare(
-      `INSERT INTO workflow_jobs (id, workflow_id, alias, query, status, created_at)
-       VALUES (?, ?, ?, ?, 'pending', ?)`
-    ).bind(jobId, instance.id, alias, query, new Date().toISOString()).run();
+    const server = createMCPServer(c.env);
+
+    // If wait=true, process synchronously and return result
+    if (body.wait) {
+      await processAsyncQuery(jobStore, server, jobId, body.alias, body.query, {
+        maxTokens: body.maxTokens,
+        temperature: body.temperature,
+      });
+
+      const job = await jobStore.get(jobId);
+      if (job?.status === 'complete' && job.result) {
+        return c.json({
+          jobId,
+          status: 'complete',
+          result: JSON.parse(job.result),
+        });
+      } else if (job?.status === 'failed') {
+        return c.json({
+          jobId,
+          status: 'failed',
+          error: job.error,
+        }, 500);
+      }
+    }
+
+    // Otherwise, start processing in background using waitUntil
+    // Note: waitUntil may not complete for very long tasks (2+ minutes)
+    c.executionCtx.waitUntil(
+      processAsyncQuery(jobStore, server, jobId, body.alias, body.query, {
+        maxTokens: body.maxTokens,
+        temperature: body.temperature,
+      })
+    );
 
     return c.json({
       jobId,
       status: 'pending',
-      message: 'Query submitted. Poll /query/status/:jobId for results.',
-    });
+      statusUrl: `/query/status/${jobId}`,
+    }, 202);
   } catch (error) {
-    console.error('Async query error:', error);
-    return c.json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
+    console.error('Failed to create async job:', error);
+    return c.json({ error: 'Failed to create async job' }, 500);
   }
 });
 
-// Check async query status
+// Poll for async query result
 app.get('/query/status/:jobId', async (c) => {
   const jobId = c.req.param('jobId');
+  const jobStore = new D1AsyncJobStore(c.env.DB);
 
-  const job = await c.env.DB.prepare(
-    `SELECT id, alias, query, status, result, error, tokens_used, cached_tokens_used, created_at, completed_at
-     FROM workflow_jobs WHERE id = ?`
-  ).bind(jobId).first<{
-    id: string;
-    alias: string;
-    query: string;
-    status: string;
-    result: string | null;
-    error: string | null;
-    tokens_used: number;
-    cached_tokens_used: number;
-    created_at: string;
-    completed_at: string | null;
-  }>();
+  try {
+    const job = await jobStore.get(jobId);
 
-  if (!job) {
-    return c.json({ error: 'Job not found' }, 404);
+    if (!job) {
+      return c.json({ error: 'Job not found' }, 404);
+    }
+
+    // Check if expired
+    if (new Date() > job.expiresAt) {
+      return c.json({ error: 'Job expired' }, 410);
+    }
+
+    const response: Record<string, unknown> = {
+      jobId: job.id,
+      status: job.status,
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString(),
+    };
+
+    if (job.status === 'complete' && job.result) {
+      response.result = JSON.parse(job.result);
+    } else if (job.status === 'failed' && job.error) {
+      response.error = job.error;
+    }
+
+    return c.json(response);
+  } catch (error) {
+    console.error('Failed to get job status:', error);
+    return c.json({ error: 'Failed to get job status' }, 500);
   }
-
-  const response: Record<string, unknown> = {
-    jobId: job.id,
-    status: job.status,
-    alias: job.alias,
-    createdAt: job.created_at,
-  };
-
-  if (job.status === 'complete' && job.result) {
-    response.result = JSON.parse(job.result);
-    response.completedAt = job.completed_at;
-    response.tokensUsed = job.tokens_used;
-    response.cachedTokensUsed = job.cached_tokens_used;
-  }
-
-  if (job.status === 'error' && job.error) {
-    response.error = job.error;
-  }
-
-  return c.json(response);
 });
+
+/**
+ * Process async query in background
+ */
+async function processAsyncQuery(
+  jobStore: D1AsyncJobStore,
+  server: MnemoMCPServer,
+  jobId: string,
+  alias: string,
+  query: string,
+  options: { maxTokens?: number; temperature?: number }
+): Promise<void> {
+  try {
+    // Mark as processing
+    await jobStore.updateStatus(jobId, 'processing');
+
+    // Execute the query via MCP server
+    const response = await server.handleRequest({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'context_query',
+        arguments: {
+          alias,
+          query,
+          maxTokens: options.maxTokens,
+          temperature: options.temperature,
+        },
+      },
+    });
+
+    // Check for errors in response
+    if ('error' in response && response.error) {
+      await jobStore.updateStatus(jobId, 'failed', undefined, response.error.message);
+      return;
+    }
+
+    // Extract result from MCP response
+    if ('result' in response && response.result) {
+      const mcpResult = response.result as { content: Array<{ type: string; text: string }>; isError?: boolean };
+
+      if (mcpResult.isError) {
+        const errorText = mcpResult.content[0]?.text ?? 'Unknown error';
+        await jobStore.updateStatus(jobId, 'failed', undefined, errorText);
+        return;
+      }
+
+      // Parse the JSON result from MCP response
+      const resultText = mcpResult.content[0]?.text;
+      if (resultText) {
+        await jobStore.updateStatus(jobId, 'complete', resultText);
+      } else {
+        await jobStore.updateStatus(jobId, 'failed', undefined, 'Empty response from query');
+      }
+    } else {
+      await jobStore.updateStatus(jobId, 'failed', undefined, 'Invalid response format');
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Async query failed:', errorMessage);
+    await jobStore.updateStatus(jobId, 'failed', undefined, errorMessage);
+  }
+}
 
 // Usage stats endpoint (for monitoring)
 app.get('/stats', async (c) => {
@@ -534,6 +629,10 @@ app.get('/stats', async (c) => {
 // ============================================================================
 
 function createMCPServer(env: Env): MnemoMCPServer {
+  const config = MnemoConfigSchema.parse({
+    geminiApiKey: env.GEMINI_API_KEY,
+  });
+
   // Create D1 content store for local model caching (persists across worker invocations)
   const contentStore = new D1ContentStore(env.DB);
 
@@ -543,22 +642,15 @@ function createMCPServer(env: Env): MnemoMCPServer {
       baseUrl: LOCAL_MODEL_URL,
       model: LOCAL_MODEL_NAME,
       maxContextTokens: LOCAL_MODEL_MAX_TOKENS,
-      timeout: 300000, // 5 minutes for large context queries
+      timeout: 120000,
     },
     contentStore
   );
 
-  // Determine which LLM client to use
+  // Use fallback client only if Gemini API key is available
   let llmClient: LLMClient;
-  const enableGeminiFallback = env.ENABLE_GEMINI_FALLBACK === 'true';
-
-  if (enableGeminiFallback && env.GEMINI_API_KEY) {
-    // Use Gemini as fallback when enabled and API key is available
-    const config = MnemoConfigSchema.parse({
-      geminiApiKey: env.GEMINI_API_KEY,
-    });
+  if (env.GEMINI_API_KEY) {
     const geminiClient = new GeminiClient(config);
-
     llmClient = new FallbackLLMClient({
       primary: localClient,
       fallback: geminiClient,
@@ -568,11 +660,9 @@ function createMCPServer(env: Env): MnemoMCPServer {
         return true; // Auto-approve fallback in CF worker
       },
     });
-    console.log('Using Nemotron with Gemini fallback');
   } else {
-    // Local-only mode: no Gemini fallback
+    console.log('No GEMINI_API_KEY configured - using local model only (no fallback)');
     llmClient = localClient;
-    console.log('Using Nemotron local-only mode (no Gemini fallback)');
   }
 
   const storage = new D1CacheStorage(env.DB);
@@ -580,11 +670,21 @@ function createMCPServer(env: Env): MnemoMCPServer {
   // Workers have a 50 subrequest limit, use 40 to leave headroom
   const urlAdapter = new UrlAdapter({ maxSubrequests: 40 });
 
+  // RAG support (v0.3) - create clients if bindings are available
+  const vectorizeClient = env.VECTORIZE ? new CloudflareVectorizeClient(env.VECTORIZE) : undefined;
+  const embeddingClient = env.AI ? new WorkersAIEmbeddingClient(env.AI) : undefined;
+  const repoIndexStorage = new D1RepoIndexStorage(env.DB);
+  const chunkStorage = new D1ChunkStorage(env.DB);
+
   return new MnemoMCPServer({
     geminiClient: llmClient,
     storage,
     usageLogger,
     urlAdapter,
+    vectorizeClient,
+    embeddingClient,
+    repoIndexStorage,
+    chunkStorage,
   });
 }
 
@@ -778,6 +878,99 @@ class D1ContentStore implements ContentStore {
 // D1 Usage Logger Implementation
 // ============================================================================
 
+// ============================================================================
+// Async Job Types and Storage
+// ============================================================================
+
+type AsyncJobStatus = 'pending' | 'processing' | 'complete' | 'failed';
+
+interface AsyncJob {
+  id: string;
+  cacheAlias: string;
+  query: string;
+  status: AsyncJobStatus;
+  result?: string; // JSON-encoded result
+  error?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  expiresAt: Date;
+}
+
+interface AsyncJobStore {
+  create(job: Omit<AsyncJob, 'createdAt' | 'updatedAt'>): Promise<string>;
+  get(id: string): Promise<AsyncJob | null>;
+  updateStatus(id: string, status: AsyncJobStatus, result?: string, error?: string): Promise<void>;
+  cleanupExpired(): Promise<number>;
+}
+
+class D1AsyncJobStore implements AsyncJobStore {
+  constructor(private db: D1Database) {}
+
+  async create(job: Omit<AsyncJob, 'createdAt' | 'updatedAt'>): Promise<string> {
+    await this.db
+      .prepare(
+        `INSERT INTO async_jobs (id, cache_alias, query, status, expires_at)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .bind(job.id, job.cacheAlias, job.query, job.status, job.expiresAt.toISOString())
+      .run();
+    return job.id;
+  }
+
+  async get(id: string): Promise<AsyncJob | null> {
+    const result = await this.db
+      .prepare('SELECT * FROM async_jobs WHERE id = ?')
+      .bind(id)
+      .first<{
+        id: string;
+        cache_alias: string;
+        query: string;
+        status: string;
+        result: string | null;
+        error: string | null;
+        created_at: string;
+        updated_at: string;
+        expires_at: string;
+      }>();
+
+    if (!result) return null;
+
+    return {
+      id: result.id,
+      cacheAlias: result.cache_alias,
+      query: result.query,
+      status: result.status as AsyncJobStatus,
+      result: result.result ?? undefined,
+      error: result.error ?? undefined,
+      createdAt: new Date(result.created_at),
+      updatedAt: new Date(result.updated_at),
+      expiresAt: new Date(result.expires_at),
+    };
+  }
+
+  async updateStatus(id: string, status: AsyncJobStatus, result?: string, error?: string): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE async_jobs
+         SET status = ?, result = ?, error = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+      )
+      .bind(status, result ?? null, error ?? null, id)
+      .run();
+  }
+
+  async cleanupExpired(): Promise<number> {
+    const result = await this.db
+      .prepare('DELETE FROM async_jobs WHERE expires_at < CURRENT_TIMESTAMP')
+      .run();
+    return result.meta?.changes ?? 0;
+  }
+}
+
+// ============================================================================
+// D1 Usage Logger Implementation
+// ============================================================================
+
 class D1UsageLogger implements UsageLogger {
   constructor(private db: D1Database) {}
 
@@ -887,7 +1080,302 @@ class D1UsageLogger implements UsageLogger {
   }
 }
 
-// Export workflow class for Cloudflare
-export { QueryWorkflow } from './workflow';
+// ============================================================================
+// Cloudflare Workers AI Embedding Client
+// ============================================================================
+
+class WorkersAIEmbeddingClient implements EmbeddingClient {
+  private ai: Ai;
+  private model = '@cf/baai/bge-base-en-v1.5';
+  private batchSize = 100; // Workers AI limit
+
+  constructor(ai: Ai) {
+    this.ai = ai;
+  }
+
+  async embed(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) {
+      return [];
+    }
+
+    // Process in batches
+    const allEmbeddings: number[][] = [];
+
+    for (let i = 0; i < texts.length; i += this.batchSize) {
+      const batch = texts.slice(i, i + this.batchSize);
+
+      const result = await this.ai.run(this.model as keyof AiModels, {
+        text: batch,
+      }) as { data: number[][] };
+
+      allEmbeddings.push(...result.data);
+    }
+
+    return allEmbeddings;
+  }
+}
+
+// ============================================================================
+// Cloudflare Vectorize Client
+// ============================================================================
+
+class CloudflareVectorizeClient implements VectorizeClient {
+  private vectorize: VectorizeIndex;
+  private batchSize = 1000; // Vectorize upsert limit
+
+  constructor(vectorize: VectorizeIndex) {
+    this.vectorize = vectorize;
+  }
+
+  async insert(vectors: Vector[]): Promise<{ count: number }> {
+    if (vectors.length === 0) {
+      return { count: 0 };
+    }
+
+    let totalInserted = 0;
+
+    // Process in batches
+    for (let i = 0; i < vectors.length; i += this.batchSize) {
+      const batch = vectors.slice(i, i + this.batchSize);
+
+      // Convert to Vectorize format
+      const vectorizeVectors: VectorizeVector[] = batch.map((v) => ({
+        id: v.id,
+        values: v.values,
+        metadata: v.metadata as Record<string, VectorizeVectorMetadata>,
+      }));
+
+      const result = await this.vectorize.upsert(vectorizeVectors);
+      totalInserted += result.count;
+    }
+
+    return { count: totalInserted };
+  }
+
+  async query(vector: number[], options: VectorizeQueryOptions = {}): Promise<VectorQueryResult> {
+    const {
+      topK = 5,
+      filter,
+      returnMetadata = true,
+    } = options;
+
+    const result = await this.vectorize.query(vector, {
+      topK,
+      filter: filter as VectorizeVectorMetadataFilter,
+      returnMetadata: returnMetadata ? 'all' : 'none',
+    });
+
+    return {
+      matches: result.matches.map((m) => ({
+        id: m.id,
+        score: m.score,
+        metadata: m.metadata as Record<string, unknown>,
+      })),
+      count: result.count,
+    };
+  }
+
+  async deleteByIds(ids: string[]): Promise<{ count: number }> {
+    if (ids.length === 0) {
+      return { count: 0 };
+    }
+
+    const result = await this.vectorize.deleteByIds(ids);
+    return { count: result.count };
+  }
+
+  async deleteByFilter(_filter: Record<string, string | number>): Promise<{ count: number }> {
+    // Vectorize doesn't support delete by filter directly
+    throw new Error('deleteByFilter not directly supported. Query first, then delete by IDs.');
+  }
+}
+
+// ============================================================================
+// D1 Repo Index Storage
+// ============================================================================
+
+class D1RepoIndexStorage implements RepoIndexStorage {
+  constructor(private db: D1Database) {}
+
+  async save(metadata: RepoIndexMetadata): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO repo_indexes (id, alias, source, chunk_count, total_tokens, file_count, expires_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(alias) DO UPDATE SET
+           source = excluded.source,
+           chunk_count = excluded.chunk_count,
+           total_tokens = excluded.total_tokens,
+           file_count = excluded.file_count,
+           indexed_at = CURRENT_TIMESTAMP,
+           expires_at = excluded.expires_at,
+           status = excluded.status`
+      )
+      .bind(
+        metadata.id,
+        metadata.alias,
+        metadata.source,
+        metadata.chunkCount,
+        metadata.totalTokens,
+        metadata.fileCount,
+        metadata.expiresAt?.toISOString() ?? null,
+        metadata.status
+      )
+      .run();
+  }
+
+  async getByAlias(alias: string): Promise<RepoIndexMetadata | null> {
+    const result = await this.db
+      .prepare('SELECT * FROM repo_indexes WHERE alias = ?')
+      .bind(alias)
+      .first<{
+        id: string;
+        alias: string;
+        source: string;
+        chunk_count: number;
+        total_tokens: number;
+        file_count: number;
+        indexed_at: string;
+        expires_at: string | null;
+        status: string;
+      }>();
+
+    if (!result) return null;
+
+    return {
+      id: result.id,
+      alias: result.alias,
+      source: result.source,
+      chunkCount: result.chunk_count,
+      totalTokens: result.total_tokens,
+      fileCount: result.file_count,
+      indexedAt: new Date(result.indexed_at),
+      expiresAt: result.expires_at ? new Date(result.expires_at) : undefined,
+      status: result.status as 'active' | 'indexing' | 'failed',
+    };
+  }
+
+  async list(): Promise<RepoIndexMetadata[]> {
+    const results = await this.db
+      .prepare('SELECT * FROM repo_indexes ORDER BY indexed_at DESC')
+      .all<{
+        id: string;
+        alias: string;
+        source: string;
+        chunk_count: number;
+        total_tokens: number;
+        file_count: number;
+        indexed_at: string;
+        expires_at: string | null;
+        status: string;
+      }>();
+
+    return (results.results ?? []).map((row) => ({
+      id: row.id,
+      alias: row.alias,
+      source: row.source,
+      chunkCount: row.chunk_count,
+      totalTokens: row.total_tokens,
+      fileCount: row.file_count,
+      indexedAt: new Date(row.indexed_at),
+      expiresAt: row.expires_at ? new Date(row.expires_at) : undefined,
+      status: row.status as 'active' | 'indexing' | 'failed',
+    }));
+  }
+
+  async deleteByAlias(alias: string): Promise<boolean> {
+    const result = await this.db
+      .prepare('DELETE FROM repo_indexes WHERE alias = ?')
+      .bind(alias)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async updateStatus(alias: string, status: 'active' | 'indexing' | 'failed'): Promise<void> {
+    await this.db
+      .prepare('UPDATE repo_indexes SET status = ? WHERE alias = ?')
+      .bind(status, alias)
+      .run();
+  }
+}
+
+/**
+ * D1 implementation of ChunkStorage for storing chunk content
+ */
+class D1ChunkStorage implements ChunkStorage {
+  constructor(private db: D1Database) {}
+
+  async saveChunks(chunks: StoredChunk[]): Promise<void> {
+    if (chunks.length === 0) return;
+
+    // Batch insert chunks (D1 has 1MB limit per statement, so we batch)
+    const batchSize = 100;
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batch = chunks.slice(i, i + batchSize);
+      const statements = batch.map((chunk) =>
+        this.db
+          .prepare(
+            `INSERT INTO repo_chunks (id, repo_alias, file_path, chunk_index, content, start_line, end_line, token_count)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               content = excluded.content,
+               start_line = excluded.start_line,
+               end_line = excluded.end_line,
+               token_count = excluded.token_count`
+          )
+          .bind(
+            chunk.id,
+            chunk.repoAlias,
+            chunk.filePath,
+            chunk.chunkIndex,
+            chunk.content,
+            chunk.startLine ?? null,
+            chunk.endLine ?? null,
+            chunk.tokenCount
+          )
+      );
+      await this.db.batch(statements);
+    }
+  }
+
+  async getChunksByIds(ids: string[]): Promise<StoredChunk[]> {
+    if (ids.length === 0) return [];
+
+    // D1 doesn't support array parameters, so we use IN with placeholders
+    const placeholders = ids.map(() => '?').join(',');
+    const result = await this.db
+      .prepare(`SELECT * FROM repo_chunks WHERE id IN (${placeholders})`)
+      .bind(...ids)
+      .all<{
+        id: string;
+        repo_alias: string;
+        file_path: string;
+        chunk_index: number;
+        content: string;
+        start_line: number | null;
+        end_line: number | null;
+        token_count: number;
+      }>();
+
+    return (result.results ?? []).map((row) => ({
+      id: row.id,
+      repoAlias: row.repo_alias,
+      filePath: row.file_path,
+      chunkIndex: row.chunk_index,
+      content: row.content,
+      startLine: row.start_line ?? undefined,
+      endLine: row.end_line ?? undefined,
+      tokenCount: row.token_count,
+    }));
+  }
+
+  async deleteByRepoAlias(repoAlias: string): Promise<number> {
+    const result = await this.db
+      .prepare('DELETE FROM repo_chunks WHERE repo_alias = ?')
+      .bind(repoAlias)
+      .run();
+    return result.meta?.changes ?? 0;
+  }
+}
 
 export default app;
