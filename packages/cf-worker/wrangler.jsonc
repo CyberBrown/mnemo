@@ -5,8 +5,13 @@
   "compatibility_date": "2024-12-01",
   "compatibility_flags": ["nodejs_compat"],
 
-  // Workers.dev URL only (no custom domain for security through obscurity)
+  // Keep workers.dev enabled for fallback
   "workers_dev": true,
+
+  // Custom domain routes - distributedelectrons.com for internal services
+  "routes": [
+    { "pattern": "mnemo.distributedelectrons.com", "zone_name": "distributedelectrons.com" }
+  ],
 
   // Extended CPU time for long-running LLM queries (5 minutes max)
   "limits": {
