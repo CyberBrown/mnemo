@@ -6,12 +6,10 @@
   "compatibility_flags": ["nodejs_compat"],
 
   // Keep workers.dev enabled for fallback
+  // Custom domains configured in Cloudflare dashboard (Settings > Domains & Routes)
+  // - mnemo.distributedelectrons.com (internal)
+  // - mnemo.logosflux.io (public/open source)
   "workers_dev": true,
-
-  // Custom domain routes - distributedelectrons.com for internal services
-  "routes": [
-    { "pattern": "mnemo.distributedelectrons.com", "zone_name": "distributedelectrons.com" }
-  ],
 
   // Extended CPU time for long-running LLM queries (5 minutes max)
   "limits": {
