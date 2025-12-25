@@ -16,6 +16,7 @@ export const contextLoadSchema = z.object({
   systemInstruction: z.string().optional().describe('System instruction for queries against this cache'),
   githubToken: z.string().optional().describe('GitHub personal access token for private repositories'),
   passphrase: z.string().optional().describe('Passphrase for write operations (required when WRITE_PASSPHRASE is configured)'),
+  syncOnly: z.boolean().optional().describe('Only sync to R2 for AI Search indexing, skip LLM cache creation (for large repos)'),
 }).refine(
   (data) => data.source || (data.sources && data.sources.length > 0),
   { message: 'Either source or sources must be provided' }
@@ -113,6 +114,10 @@ export const toolDefinitions: MCPToolDefinition[] = [
         passphrase: {
           type: 'string',
           description: 'Passphrase for write operations (required when WRITE_PASSPHRASE is configured)',
+        },
+        syncOnly: {
+          type: 'boolean',
+          description: 'Only sync to R2 for AI Search indexing, skip LLM cache creation (for large repos)',
         },
       },
       required: ['alias'],

@@ -247,22 +247,40 @@ export async function handleContextLoad(
     throw new Error(`Failed to load source: ${(error as Error).message}`);
   }
 
-  // Create Gemini cache
-  // Note: TTL defaults to 1 hour (3600s) for Gemini compatibility.
-  // With local Nemotron (no Gemini 1-hour cache limit), we can extend this significantly in the future.
-  // Consider 24h+ TTLs when running purely on local models.
-  const cacheMetadata = await geminiClient.createCache(
-    loadedSource.content,
-    input.alias,
-    {
-      ttl: input.ttl,
-      systemInstruction: input.systemInstruction ?? DEFAULT_SYSTEM_INSTRUCTION,
-    }
-  );
+  // For syncOnly mode, skip LLM cache creation and just sync to R2
+  // This is useful for large repos that exceed the LLM context limit
+  // but should still be searchable via AI Search
+  let cacheMetadata: CacheMetadata;
 
-  // Update with actual source info
-  cacheMetadata.source = loadedSource.metadata.source;
-  cacheMetadata.tokenCount = loadedSource.totalTokens;
+  if (input.syncOnly) {
+    // Create a minimal metadata entry for R2-only sync
+    cacheMetadata = {
+      name: `r2-only:${input.alias}:${Date.now()}`,
+      alias: input.alias,
+      tokenCount: loadedSource.totalTokens,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + (input.ttl ?? 604800) * 1000), // Default 1 week for R2-only
+      source: loadedSource.metadata.source,
+      model: 'r2-only', // Indicate this is R2-only, no LLM cache
+    };
+  } else {
+    // Create Gemini cache
+    // Note: TTL defaults to 1 hour (3600s) for Gemini compatibility.
+    // With local Nemotron (no Gemini 1-hour cache limit), we can extend this significantly in the future.
+    // Consider 24h+ TTLs when running purely on local models.
+    cacheMetadata = await geminiClient.createCache(
+      loadedSource.content,
+      input.alias,
+      {
+        ttl: input.ttl,
+        systemInstruction: input.systemInstruction ?? DEFAULT_SYSTEM_INSTRUCTION,
+      }
+    );
+
+    // Update with actual source info
+    cacheMetadata.source = loadedSource.metadata.source;
+    cacheMetadata.tokenCount = loadedSource.totalTokens;
+  }
 
   // Store in local storage
   await storage.save(cacheMetadata);

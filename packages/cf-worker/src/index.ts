@@ -604,6 +604,135 @@ async function processAsyncQuery(
   }
 }
 
+// ============================================================================
+// GitHub Webhook Endpoint for Auto-Updates
+// ============================================================================
+
+app.post('/webhooks/github', async (c) => {
+  const env = c.env as Env;
+  const webhookSecret = env.GITHUB_WEBHOOK_SECRET;
+
+  // Validate webhook signature if secret is configured
+  if (webhookSecret) {
+    const signature = c.req.header('X-Hub-Signature-256');
+    if (!signature) {
+      return c.json({ error: 'Missing signature' }, 401);
+    }
+
+    const body = await c.req.text();
+    const isValid = await verifyGitHubSignature(body, signature, webhookSecret);
+    if (!isValid) {
+      return c.json({ error: 'Invalid signature' }, 401);
+    }
+
+    // Re-parse body since we consumed it
+    const payload = JSON.parse(body);
+    return await handleGitHubWebhook(c, env, payload);
+  }
+
+  // No secret configured - accept all webhooks (less secure)
+  const payload = await c.req.json();
+  return await handleGitHubWebhook(c, env, payload);
+});
+
+async function verifyGitHubSignature(
+  payload: string,
+  signature: string,
+  secret: string
+): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  const expectedSignature = 'sha256=' + Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  return signature === expectedSignature;
+}
+
+async function handleGitHubWebhook(
+  c: any,
+  env: Env,
+  payload: any
+): Promise<Response> {
+  const event = c.req.header('X-GitHub-Event');
+
+  // Only handle push events
+  if (event !== 'push') {
+    return c.json({ message: `Ignoring event: ${event}` }, 200);
+  }
+
+  // Extract repo info
+  const repoFullName = payload.repository?.full_name;
+  const repoName = payload.repository?.name;
+  const defaultBranch = payload.repository?.default_branch;
+  const ref = payload.ref;
+
+  if (!repoFullName || !repoName) {
+    return c.json({ error: 'Missing repository info' }, 400);
+  }
+
+  // Only refresh on pushes to default branch
+  if (ref !== `refs/heads/${defaultBranch}`) {
+    return c.json({ message: `Ignoring push to non-default branch: ${ref}` }, 200);
+  }
+
+  // Check if we have a cache for this repo (try both full name and short name)
+  const storage = new D1CacheStorage(env.DB);
+  let cache = await storage.getByAlias(repoName);
+  if (!cache) {
+    // Try with full name as alias (owner-repo format)
+    const fullAlias = repoFullName.replace('/', '-');
+    cache = await storage.getByAlias(fullAlias);
+  }
+
+  if (!cache) {
+    return c.json({ message: `No cache found for repo: ${repoName}` }, 200);
+  }
+
+  // Refresh the cache in background
+  const server = createMCPServer(env);
+  const githubToken = env.GITHUB_TOKEN; // Use configured token for private repos
+  const passphrase = env.WRITE_PASSPHRASE;
+
+  c.executionCtx.waitUntil(
+    (async () => {
+      try {
+        console.log(`Refreshing cache for ${cache.alias} due to push event`);
+        await server.handleRequest({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: {
+            name: 'context_refresh',
+            arguments: {
+              alias: cache.alias,
+              githubToken,
+              passphrase,
+            },
+          },
+        });
+        console.log(`Successfully refreshed cache: ${cache.alias}`);
+      } catch (error) {
+        console.error(`Failed to refresh cache ${cache.alias}:`, error);
+      }
+    })()
+  );
+
+  return c.json({
+    message: 'Refresh triggered',
+    alias: cache.alias,
+    repo: repoFullName,
+  }, 202);
+}
+
 // Usage stats endpoint (for monitoring)
 app.get('/stats', async (c) => {
   const kv = c.env.RATE_LIMIT_KV;

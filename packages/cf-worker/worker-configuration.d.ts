@@ -15,4 +15,11 @@ interface Env {
 	ALERT_EMAIL?: string;
 	DAILY_REQUEST_LIMIT?: string;
 	DAILY_TOKEN_LIMIT?: string;
+	// AI Search (v0.4)
+	AI_SEARCH_NAME?: string;
+	AI_SEARCH_CONFIDENCE_THRESHOLD?: string;
+	AI_SEARCH_MAX_RESULTS?: string;
+	// GitHub Webhooks
+	GITHUB_WEBHOOK_SECRET?: string;
+	GITHUB_TOKEN?: string;
 }
