@@ -342,7 +342,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_query \
 - [x] PDF and Markdown support
 - [x] Cache refresh functionality
 
-### v0.2 - Source Adapters (In Progress)
+### v0.2 - Source Adapters ✅
 - [x] Extensible source adapter interface
 - [x] Documentation site crawler
 - [ ] Notion API integration
@@ -351,6 +351,22 @@ curl -X POST https://mnemo.logosflux.io/tools/context_query \
 - [ ] Obsidian vault
 - [ ] Meeting transcripts
 - [ ] Email exports
+
+### v0.3 - RAG Support ✅
+- [x] Chunking system for large codebases
+- [x] Vectorize integration for vector storage
+- [x] Workers AI embeddings (bge-base-en-v1.5)
+- [x] context_index tool for indexing repos
+- [x] RAG-based query flow
+
+### v0.4 - Tiered Query with AI Search (In Progress)
+- [x] Cloudflare AI Search integration (auto-indexes from R2)
+- [x] TieredQueryHandler (AI Search → Nemotron → Gemini)
+- [x] R2 sync on context_load for AI Search indexing
+- [x] Confidence-based routing (threshold: 0.7)
+- [x] forceFullContext parameter for comprehensive queries
+- [ ] AI Search instance creation (manual via dashboard)
+- [ ] Production testing and tuning
 
 ## References
 

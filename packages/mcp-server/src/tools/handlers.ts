@@ -28,6 +28,10 @@ import {
   type RepoIndexMetadata,
   type ChunkStorage,
   type StoredChunk,
+  // AI Search tiered query (v0.4)
+  type AISearchClient,
+  type TieredQueryHandler,
+  type TieredQueryResult,
 } from '@mnemo/core';
 import {
   contextLoadSchema,
@@ -84,6 +88,28 @@ export interface ToolHandlerDeps {
   repoIndexStorage?: RepoIndexStorage;
   /** Storage for chunk content */
   chunkStorage?: ChunkStorage;
+  // AI Search tiered query (v0.4)
+  /** AI Search client for CF AI Search */
+  aiSearchClient?: AISearchClient;
+  /** Tiered query handler (AI Search → Nemotron → Gemini) */
+  tieredQueryHandler?: TieredQueryHandler;
+  /** R2-compatible storage for syncing content to AI Search */
+  r2Bucket?: R2BucketLike;
+}
+
+/**
+ * R2-compatible interface for syncing content
+ * Allows use in both CF Workers (with R2Bucket) and other environments
+ */
+export interface R2BucketLike {
+  put(
+    key: string,
+    value: string | ArrayBuffer | ReadableStream,
+    options?: {
+      httpMetadata?: { contentType?: string };
+      customMetadata?: Record<string, string>;
+    }
+  ): Promise<unknown>;
 }
 
 /**
@@ -181,7 +207,7 @@ export interface LoadTiming {
 export async function handleContextLoad(
   deps: ToolHandlerDeps,
   rawInput: unknown
-): Promise<{ success: true; cache: CacheMetadata; sourcesLoaded: number; timing: LoadTiming }> {
+): Promise<{ success: true; cache: CacheMetadata; sourcesLoaded: number; timing: LoadTiming; r2Synced?: boolean }> {
   const startTime = Date.now();
   const input = contextLoadSchema.parse(rawInput);
   validateWritePassphrase(deps, input.passphrase);
@@ -251,6 +277,20 @@ export async function handleContextLoad(
     });
   }
 
+  // Sync to R2 for AI Search indexing (v0.4)
+  // AI Search auto-indexes R2 content, so we store in folder by alias
+  let r2Synced = false;
+  if (deps.r2Bucket) {
+    try {
+      await syncToR2(deps.r2Bucket, input.alias, loadedSource);
+      r2Synced = true;
+      console.log(`Synced ${input.alias} to R2 for AI Search indexing`);
+    } catch (error) {
+      // Non-fatal - cache still works, just no AI Search indexing
+      console.warn(`Failed to sync to R2: ${(error as Error).message}`);
+    }
+  }
+
   // Calculate timing metrics
   const loadMs = Date.now() - startTime;
   const tokensLoaded = loadedSource.totalTokens;
@@ -261,7 +301,75 @@ export async function handleContextLoad(
     cache: cacheMetadata,
     sourcesLoaded: sourcesToLoad.length,
     timing: { loadMs, tokensLoaded, tokensPerSecond },
+    r2Synced,
   };
+}
+
+/**
+ * Sync loaded source content to R2 for AI Search indexing
+ * AI Search auto-indexes content from R2 buckets
+ */
+async function syncToR2(bucket: R2BucketLike, alias: string, source: LoadedSource): Promise<void> {
+  // Store as markdown file that AI Search can index
+  // Use folder structure for multitenancy: {alias}/content.md
+  const key = `${alias}/content.md`;
+
+  // Build metadata for AI Search
+  const metadata: Record<string, string> = {
+    alias,
+    source: source.metadata.source,
+    fileCount: String(source.fileCount),
+    totalTokens: String(source.totalTokens),
+    indexedAt: new Date().toISOString(),
+  };
+
+  // Store the content
+  await bucket.put(key, source.content, {
+    httpMetadata: {
+      contentType: 'text/markdown',
+    },
+    customMetadata: metadata,
+  });
+
+  // Also store individual files for better chunking
+  // AI Search works best with smaller files
+  for (const file of source.files) {
+    const fileKey = `${alias}/files/${file.path}`;
+    await bucket.put(fileKey, file.content, {
+      httpMetadata: {
+        contentType: getMimeType(file.path),
+      },
+      customMetadata: {
+        alias,
+        filePath: file.path,
+        tokenEstimate: String(file.tokenEstimate),
+      },
+    });
+  }
+}
+
+/**
+ * Get MIME type from file extension
+ */
+function getMimeType(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    md: 'text/markdown',
+    txt: 'text/plain',
+    ts: 'text/typescript',
+    tsx: 'text/typescript',
+    js: 'text/javascript',
+    jsx: 'text/javascript',
+    json: 'application/json',
+    yaml: 'text/yaml',
+    yml: 'text/yaml',
+    py: 'text/x-python',
+    rs: 'text/x-rust',
+    go: 'text/x-go',
+    html: 'text/html',
+    css: 'text/css',
+  };
+  return mimeTypes[ext ?? ''] ?? 'text/plain';
 }
 
 /** Timing metrics for context_query */
@@ -510,18 +618,90 @@ Answer the user's question based on your knowledge of common code patterns and t
   };
 }
 
+/** Extended query result with tiered info */
+export interface TieredQueryResultWithTiming extends TieredQueryResult {
+  timing: QueryTiming;
+}
+
+/**
+ * Query using tiered AI Search → Nemotron → Gemini pipeline
+ */
+async function queryViaTieredHandler(
+  deps: ToolHandlerDeps,
+  alias: string,
+  query: string,
+  options: { maxTokens?: number; temperature?: number; forceFullContext?: boolean }
+): Promise<TieredQueryResultWithTiming> {
+  const startTime = Date.now();
+  const { tieredQueryHandler, usageLogger, storage } = deps;
+
+  if (!tieredQueryHandler) {
+    throw new MnemoError('Tiered query handler not configured', 'TIERED_QUERY_NOT_CONFIGURED');
+  }
+
+  const result = await tieredQueryHandler.query(alias, query, {
+    maxOutputTokens: options.maxTokens,
+    temperature: options.temperature,
+    forceFullContext: options.forceFullContext,
+  });
+
+  // Log usage
+  if (usageLogger) {
+    const cache = await storage.getByAlias(alias);
+    if (cache) {
+      await usageLogger.log({
+        cacheId: cache.name,
+        operation: 'query',
+        tokensUsed: result.tokensUsed,
+        cachedTokensUsed: result.cachedTokensUsed ?? 0,
+      });
+    }
+  }
+
+  const queryMs = Date.now() - startTime;
+  return {
+    ...result,
+    timing: {
+      queryMs,
+      contextTokens: result.ragChunks ?? 0,
+      outputTokens: Math.ceil(result.response.length / 4), // Estimate
+      tokensPerSecond: queryMs > 0 ? Math.round((result.tokensUsed / queryMs) * 1000) : 0,
+    },
+  };
+}
+
 /**
  * Query a cached context
  */
 export async function handleContextQuery(
   deps: ToolHandlerDeps,
   rawInput: unknown
-): Promise<QueryResultWithTiming | CacheExpiredResponseWithTiming | RAGQueryResult> {
+): Promise<QueryResultWithTiming | CacheExpiredResponseWithTiming | RAGQueryResult | TieredQueryResultWithTiming> {
   const startTime = Date.now();
   const input = contextQuerySchema.parse(rawInput);
-  const { geminiClient, storage, asyncQueryConfig, repoIndexStorage, vectorizeClient, embeddingClient } = deps;
+  const { geminiClient, storage, asyncQueryConfig, repoIndexStorage, vectorizeClient, embeddingClient, tieredQueryHandler } = deps;
 
-  // Check if there's a vector index for this alias
+  // Priority 1: Try tiered AI Search query (v0.4)
+  if (tieredQueryHandler) {
+    try {
+      // Check if AI Search is available
+      const aiSearchAvailable = await tieredQueryHandler.isAISearchAvailable();
+      if (aiSearchAvailable) {
+        return queryViaTieredHandler(deps, input.alias, input.query, {
+          maxTokens: input.maxTokens,
+          temperature: input.temperature,
+          forceFullContext: input.forceFullContext,
+        });
+      }
+      // AI Search not available, fall through to other methods
+      console.log('AI Search not available, falling back to other query methods');
+    } catch (error) {
+      console.warn('Tiered query failed, falling back:', error);
+      // Continue with fallback methods
+    }
+  }
+
+  // Priority 2: Check if there's a vector index for this alias (v0.3 RAG)
   if (repoIndexStorage && vectorizeClient && embeddingClient) {
     const repoIndex = await repoIndexStorage.getByAlias(input.alias);
     if (repoIndex && repoIndex.status === 'active') {
@@ -533,7 +713,7 @@ export async function handleContextQuery(
     }
   }
 
-  // Fall back to cache-based query
+  // Priority 3: Fall back to cache-based query
   const cache = await storage.getByAlias(input.alias);
   if (!cache) {
     throw new CacheNotFoundError(input.alias);

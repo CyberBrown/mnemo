@@ -28,3 +28,9 @@ export * from './chunker';
 
 // Vectorize Client (v0.3 - RAG support)
 export * from './vectorize-client';
+
+// AI Search Client (v0.4 - Tiered RAG with CF AI Search)
+export * from './ai-search-client';
+
+// Tiered Query Handler (v0.4 - AI Search + Nemotron tier, Gemini fallback)
+export * from './tiered-query';

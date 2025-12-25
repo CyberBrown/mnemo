@@ -28,6 +28,7 @@ export const contextQuerySchema = z.object({
   query: z.string().describe('Question or instruction'),
   maxTokens: z.number().default(1024).describe('Maximum tokens in response (default: 1024)'),
   temperature: z.number().min(0).max(2).optional().describe('Temperature for generation'),
+  forceFullContext: z.boolean().optional().describe('Skip RAG/AI Search and force full context load (slower but more comprehensive)'),
 });
 
 export type ContextQueryInput = z.infer<typeof contextQuerySchema>;
@@ -119,7 +120,7 @@ export const toolDefinitions: MCPToolDefinition[] = [
   },
   {
     name: 'context_query',
-    description: 'Query a cached context. The cache must have been created with context_load first.',
+    description: 'Query a cached context. Uses tiered routing: AI Search (fast RAG) → Nemotron synthesis → Gemini fallback. The cache must have been created with context_load first.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -138,6 +139,10 @@ export const toolDefinitions: MCPToolDefinition[] = [
         temperature: {
           type: 'number',
           description: 'Temperature for generation (0-2)',
+        },
+        forceFullContext: {
+          type: 'boolean',
+          description: 'Skip RAG/AI Search and force full context load (slower but more comprehensive)',
         },
       },
       required: ['alias', 'query'],

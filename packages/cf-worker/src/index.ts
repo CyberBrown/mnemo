@@ -28,6 +28,10 @@ import {
   type VectorizeQueryOptions,
   type ChunkStorage,
   type StoredChunk,
+  // AI Search tiered query (v0.4)
+  CloudflareAISearchAdapter,
+  TieredQueryHandler,
+  createTieredQueryHandler,
 } from '@mnemo/core';
 import { MnemoMCPServer, toolDefinitions } from '@mnemo/mcp-server';
 
@@ -676,6 +680,25 @@ function createMCPServer(env: Env): MnemoMCPServer {
   const repoIndexStorage = new D1RepoIndexStorage(env.DB);
   const chunkStorage = new D1ChunkStorage(env.DB);
 
+  // AI Search tiered query (v0.4) - create if AI binding is available
+  const aiSearchName = env.AI_SEARCH_NAME ?? 'mnemo-knowledge';
+  const confidenceThreshold = parseFloat(env.AI_SEARCH_CONFIDENCE_THRESHOLD ?? '0.7');
+  const aiSearchClient = env.AI ? new CloudflareAISearchAdapter(env.AI, aiSearchName) : undefined;
+  const tieredQueryHandler = aiSearchClient
+    ? createTieredQueryHandler(aiSearchClient, llmClient, LOCAL_MODEL_URL, {
+        localModelName: LOCAL_MODEL_NAME,
+        defaultConfidenceThreshold: confidenceThreshold,
+        timeout: 120000,
+      })
+    : undefined;
+
+  // Log AI Search configuration
+  if (aiSearchClient) {
+    console.log(`AI Search configured: ${aiSearchName} (threshold: ${confidenceThreshold})`);
+  } else {
+    console.log('AI Search not configured - using fallback query methods');
+  }
+
   return new MnemoMCPServer({
     geminiClient: llmClient,
     storage,
@@ -685,6 +708,10 @@ function createMCPServer(env: Env): MnemoMCPServer {
     embeddingClient,
     repoIndexStorage,
     chunkStorage,
+    // AI Search tiered query (v0.4)
+    aiSearchClient,
+    tieredQueryHandler,
+    r2Bucket: env.STORAGE,
   });
 }
 

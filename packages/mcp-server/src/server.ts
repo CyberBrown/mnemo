@@ -9,6 +9,8 @@ import {
   type EmbeddingClient,
   type RepoIndexStorage,
   type ChunkStorage,
+  type AISearchClient,
+  type TieredQueryHandler,
   MnemoError,
 } from '@mnemo/core';
 import {
@@ -31,6 +33,7 @@ import {
   handleContextIndex,
   type ToolHandlerDeps,
   type AsyncQueryConfig,
+  type R2BucketLike,
 } from './tools/handlers';
 
 export interface MnemoMCPServerConfig {
@@ -48,6 +51,10 @@ export interface MnemoMCPServerConfig {
   embeddingClient?: EmbeddingClient;
   repoIndexStorage?: RepoIndexStorage;
   chunkStorage?: ChunkStorage;
+  // AI Search tiered query (v0.4)
+  aiSearchClient?: AISearchClient;
+  tieredQueryHandler?: TieredQueryHandler;
+  r2Bucket?: R2BucketLike;
 }
 
 /**
@@ -72,6 +79,10 @@ export class MnemoMCPServer {
       embeddingClient: config.embeddingClient,
       repoIndexStorage: config.repoIndexStorage,
       chunkStorage: config.chunkStorage,
+      // AI Search tiered query (v0.4)
+      aiSearchClient: config.aiSearchClient,
+      tieredQueryHandler: config.tieredQueryHandler,
+      r2Bucket: config.r2Bucket,
     };
   }
 
