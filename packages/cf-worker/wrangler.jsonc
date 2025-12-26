@@ -30,6 +30,18 @@
     {
       "binding": "STORAGE",
       "bucket_name": "mnemo-files"
+    },
+    {
+      "binding": "MNEMO_CONTENT",
+      "bucket_name": "mnemo-content"
+    }
+  ],
+
+  // AI Search for tiered RAG queries
+  "ai_search": [
+    {
+      "binding": "AI_SEARCH",
+      "index_name": "mnemo-search"
     }
   ],
 
