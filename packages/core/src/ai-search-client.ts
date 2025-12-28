@@ -12,6 +12,23 @@
 
 import { z } from 'zod';
 
+/**
+ * Cloudflare Workers AI binding interface
+ * This is a minimal type for the Ai binding - full types available in @cloudflare/workers-types
+ */
+interface CloudflareAi {
+  autorag(instanceName: string): {
+    search(options: {
+      query: string;
+      rewrite_query?: boolean;
+      max_num_results?: number;
+      ranking_options?: { score_threshold?: number };
+      reranking?: { enabled?: boolean; model?: string };
+      filters?: Record<string, unknown>;
+    }): Promise<CFAISearchResponse>;
+  };
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -119,10 +136,10 @@ interface CFAISearchResponse {
  * ```
  */
 export class CloudflareAISearchAdapter implements AISearchClient {
-  private ai: Ai;
+  private ai: CloudflareAi;
   private instanceName: string;
 
-  constructor(ai: Ai, instanceName: string) {
+  constructor(ai: CloudflareAi, instanceName: string) {
     this.ai = ai;
     this.instanceName = instanceName;
   }
@@ -159,7 +176,6 @@ export class CloudflareAISearchAdapter implements AISearchClient {
 
     try {
       // Access AutoRAG via AI binding
-      // @ts-expect-error - AI Search types not yet in @cloudflare/workers-types
       const autorag = this.ai.autorag(this.instanceName);
 
       const response: CFAISearchResponse = await autorag.search({
@@ -209,10 +225,30 @@ export class CloudflareAISearchAdapter implements AISearchClient {
 
   async isAvailable(): Promise<boolean> {
     try {
-      // Try a minimal search to check availability
-      await this.search('test', { maxResults: 1 });
+      // Directly call the API to check if instance exists
+      // Don't use search() as it catches "not found" errors and returns empty results
+      const autorag = this.ai.autorag(this.instanceName);
+
+      const response: CFAISearchResponse = await autorag.search({
+        query: 'availability-check',
+        max_num_results: 1,
+      });
+
+      // Instance must exist AND have indexed content to be considered available
+      // An empty data array means the instance exists but has no content indexed
+      const hasContent = response?.data && Array.isArray(response.data) && response.data.length > 0;
+
+      if (!hasContent) {
+        console.log(`AI Search instance '${this.instanceName}' has no indexed content - disabling tiered queries`);
+        return false;
+      }
+
       return true;
-    } catch {
+    } catch (error) {
+      // Instance doesn't exist or API error
+      if (error instanceof Error) {
+        console.log(`AI Search instance '${this.instanceName}' not available: ${error.message}`);
+      }
       return false;
     }
   }
