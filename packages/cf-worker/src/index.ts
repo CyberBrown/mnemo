@@ -810,7 +810,7 @@ function createMCPServer(env: Env): MnemoMCPServer {
   const chunkStorage = new D1ChunkStorage(env.DB);
 
   // AI Search tiered query (v0.4) - create if AI binding is available
-  const aiSearchName = env.AI_SEARCH_NAME ?? 'mnemo-knowledge';
+  const aiSearchName = env.AI_SEARCH_NAME ?? 'mnemo-search';
   const confidenceThreshold = parseFloat(env.AI_SEARCH_CONFIDENCE_THRESHOLD ?? '0.7');
   const aiSearchClient = env.AI ? new CloudflareAISearchAdapter(env.AI, aiSearchName) : undefined;
   const tieredQueryHandler = aiSearchClient

@@ -59,7 +59,7 @@ AI Search must be created via the Cloudflare Dashboard:
 2. Navigate to **AI** → **AI Search (AutoRAG)**
 3. Click **Create AI Search**
 4. Configure:
-   - **Name**: `mnemo-knowledge`
+   - **Name**: `mnemo-search`
    - **Data Source**: Select `mnemo-files` R2 bucket
    - **Embedding Model**: Default (recommended)
    - **LLM**: Default (we override this with Nemotron)
@@ -88,7 +88,7 @@ Check that wrangler.jsonc has the AI Search configuration:
     }
   ],
   "vars": {
-    "AI_SEARCH_NAME": "mnemo-knowledge",
+    "AI_SEARCH_NAME": "mnemo-search",
     "AI_SEARCH_CONFIDENCE_THRESHOLD": "0.7",
     "AI_SEARCH_MAX_RESULTS": "10"
   }
@@ -161,7 +161,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_query \
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_SEARCH_NAME` | `mnemo-knowledge` | AI Search instance name |
+| `AI_SEARCH_NAME` | `mnemo-search` | AI Search instance name |
 | `AI_SEARCH_CONFIDENCE_THRESHOLD` | `0.7` | Minimum confidence for RAG (0-1) |
 | `AI_SEARCH_MAX_RESULTS` | `10` | Max chunks to retrieve |
 

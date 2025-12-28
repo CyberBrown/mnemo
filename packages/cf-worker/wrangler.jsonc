@@ -73,7 +73,7 @@
     "DAILY_REQUEST_LIMIT": "5000",
     "DAILY_TOKEN_LIMIT": "2000000",
     // AI Search (tiered RAG) configuration
-    "AI_SEARCH_NAME": "mnemo-knowledge",
+    "AI_SEARCH_NAME": "mnemo-search",
     "AI_SEARCH_CONFIDENCE_THRESHOLD": "0.7",
     "AI_SEARCH_MAX_RESULTS": "10"
   },

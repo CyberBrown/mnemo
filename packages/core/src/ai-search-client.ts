@@ -111,7 +111,7 @@ interface CFAISearchResponse {
  *
  * Usage:
  * ```typescript
- * const aiSearch = new CloudflareAISearchAdapter(env.AI, 'mnemo-knowledge');
+ * const aiSearch = new CloudflareAISearchAdapter(env.AI, 'mnemo-search');
  * const results = await aiSearch.search('How does authentication work?', {
  *   folder: 'my-alias', // scope to specific cache alias
  *   maxResults: 10,
