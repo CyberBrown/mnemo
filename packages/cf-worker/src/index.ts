@@ -684,51 +684,93 @@ async function handleGitHubWebhook(
     return c.json({ message: `Ignoring push to non-default branch: ${ref}` }, 200);
   }
 
-  // Check if we have a cache for this repo (try both full name and short name)
+  // Check if we have a cache or index for this repo (try both full name and short name)
   const storage = new D1CacheStorage(env.DB);
+  const repoIndexStorage = new D1RepoIndexStorage(env.DB);
+  const fullAlias = repoFullName.replace('/', '-');
+
+  // Check for cache
   let cache = await storage.getByAlias(repoName);
   if (!cache) {
-    // Try with full name as alias (owner-repo format)
-    const fullAlias = repoFullName.replace('/', '-');
     cache = await storage.getByAlias(fullAlias);
   }
 
-  if (!cache) {
-    return c.json({ message: `No cache found for repo: ${repoName}` }, 200);
+  // Check for Vectorize index
+  let repoIndex = await repoIndexStorage.getByAlias(repoName);
+  if (!repoIndex) {
+    repoIndex = await repoIndexStorage.getByAlias(fullAlias);
   }
 
-  // Refresh the cache in background
+  // Need at least one to trigger refresh
+  if (!cache && !repoIndex) {
+    return c.json({ message: `No cache or index found for repo: ${repoName}` }, 200);
+  }
+
   const server = createMCPServer(env);
-  const githubToken = env.GITHUB_TOKEN; // Use configured token for private repos
+  const githubToken = env.GITHUB_TOKEN;
   const passphrase = env.WRITE_PASSPHRASE;
+  const repoUrl = `https://github.com/${repoFullName}`;
+
+  // Track what we're refreshing
+  const refreshing: string[] = [];
 
   c.executionCtx.waitUntil(
     (async () => {
-      try {
-        console.log(`Refreshing cache for ${cache.alias} due to push event`);
-        await server.handleRequest({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'tools/call',
-          params: {
-            name: 'context_refresh',
-            arguments: {
-              alias: cache.alias,
-              githubToken,
-              passphrase,
+      // Priority: Re-index Vectorize (this is what queries use)
+      if (repoIndex) {
+        try {
+          console.log(`Re-indexing Vectorize for ${repoIndex.alias} due to push event`);
+          await server.handleRequest({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: {
+              name: 'context_index',
+              arguments: {
+                source: repoUrl,
+                alias: repoIndex.alias,
+                githubToken,
+                passphrase,
+              },
             },
-          },
-        });
-        console.log(`Successfully refreshed cache: ${cache.alias}`);
-      } catch (error) {
-        console.error(`Failed to refresh cache ${cache.alias}:`, error);
+          });
+          console.log(`Successfully re-indexed: ${repoIndex.alias}`);
+          refreshing.push(`index:${repoIndex.alias}`);
+        } catch (error) {
+          console.error(`Failed to re-index ${repoIndex.alias}:`, error);
+        }
+      }
+
+      // Also refresh Nemotron cache if it exists (for context_load use cases)
+      if (cache) {
+        try {
+          console.log(`Refreshing Nemotron cache for ${cache.alias} due to push event`);
+          await server.handleRequest({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tools/call',
+            params: {
+              name: 'context_refresh',
+              arguments: {
+                alias: cache.alias,
+                githubToken,
+                passphrase,
+              },
+            },
+          });
+          console.log(`Successfully refreshed cache: ${cache.alias}`);
+          refreshing.push(`cache:${cache.alias}`);
+        } catch (error) {
+          console.error(`Failed to refresh cache ${cache.alias}:`, error);
+        }
       }
     })()
   );
 
   return c.json({
     message: 'Refresh triggered',
-    alias: cache.alias,
+    indexAlias: repoIndex?.alias,
+    cacheAlias: cache?.alias,
     repo: repoFullName,
   }, 202);
 }
@@ -780,9 +822,14 @@ function createMCPServer(env: Env): MnemoMCPServer {
     contentStore
   );
 
-  // Use fallback client only if Gemini API key is available
+  // LLM Client Selection
+  // GEMINI DISABLED: Direct Gemini calls are paused for cost reasons.
+  // If Gemini is needed in future, route through DE (Distributed Elections) instead.
+  // For now, use local Nemotron model only.
+  const GEMINI_ENABLED = false; // Set to true to enable Gemini fallback (requires API key)
+
   let llmClient: LLMClient;
-  if (env.GEMINI_API_KEY) {
+  if (GEMINI_ENABLED && env.GEMINI_API_KEY) {
     const geminiClient = new GeminiClient(config);
     llmClient = new FallbackLLMClient({
       primary: localClient,
@@ -794,7 +841,7 @@ function createMCPServer(env: Env): MnemoMCPServer {
       },
     });
   } else {
-    console.log('No GEMINI_API_KEY configured - using local model only (no fallback)');
+    console.log('Using local model only (Gemini disabled)');
     llmClient = localClient;
   }
 
