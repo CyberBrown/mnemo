@@ -59,7 +59,7 @@ const DEFAULT_SYSTEM_INSTRUCTION =
  * Configuration for async query polling
  */
 export interface AsyncQueryConfig {
-  /** Base URL for async endpoints (e.g., https://mnemo.logosflux.io) */
+  /** Base URL for async endpoints (e.g., https://mnemo.solamp.workers.dev) */
   baseUrl: string;
   /** Polling interval in ms (default: 1500) */
   pollIntervalMs?: number;

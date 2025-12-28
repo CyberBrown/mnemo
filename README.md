@@ -111,7 +111,7 @@ bunx wrangler deploy
 
 Don't want to manage infrastructure? We offer fully managed Mnemo hosting for select clients.
 
-**Demo instance:** `https://mnemo.logosflux.io` (contact us for access)
+**Demo instance:** `https://mnemo.solamp.workers.dev` (contact us for access)
 
 **Includes:**
 - Dedicated Worker deployment

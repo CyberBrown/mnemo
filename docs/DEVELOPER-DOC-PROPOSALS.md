@@ -416,7 +416,7 @@ export async function onRequestPost(context) {
   const { alias, query } = await request.json();
 
   // Call Mnemo Worker
-  const response = await fetch('https://mnemo.logosflux.io/tools/context_query', {
+  const response = await fetch('https://mnemo.solamp.workers.dev/tools/context_query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ alias, query })

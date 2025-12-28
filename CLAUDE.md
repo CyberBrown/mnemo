@@ -305,7 +305,7 @@ export async function context_load(
 
 | Resource | Value |
 |----------|-------|
-| Live URL | https://mnemo.logosflux.io |
+| Live URL | https://mnemo.solamp.workers.dev |
 | D1 Database | `mnemo-cache` (1bf57f2d-d380-475f-8faa-b9f791d14662) |
 | R2 Bucket | `mnemo-files` |
 
@@ -320,12 +320,12 @@ export async function context_load(
 
 ```bash
 # Load a repo
-curl -X POST https://mnemo.logosflux.io/tools/context_load \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
   -H "Content-Type: application/json" \
   -d '{"source": "https://github.com/owner/repo", "alias": "myrepo"}'
 
 # Query it
-curl -X POST https://mnemo.logosflux.io/tools/context_query \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
   -H "Content-Type: application/json" \
   -d '{"alias": "myrepo", "query": "What is this project?"}'
 ```

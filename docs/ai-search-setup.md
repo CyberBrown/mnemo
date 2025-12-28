@@ -110,7 +110,7 @@ When you use `context_load`, content is automatically synced to R2:
 
 ```bash
 # Via API
-curl -X POST https://mnemo.logosflux.io/tools/context_load \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
   -H "Content-Type: application/json" \
   -d '{
     "source": "https://github.com/owner/repo",
@@ -128,7 +128,7 @@ The content is stored in R2 at:
 Queries automatically use the tiered approach:
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_query \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
   -H "Content-Type: application/json" \
   -d '{
     "alias": "my-repo",
@@ -146,7 +146,7 @@ Response includes the query source:
 Skip AI Search for comprehensive queries:
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_query \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
   -H "Content-Type: application/json" \
   -d '{
     "alias": "my-repo",
@@ -182,7 +182,7 @@ Monitor AI Search usage through AI Gateway:
 ### Health Check
 
 ```bash
-curl https://mnemo.logosflux.io/health
+curl https://mnemo.solamp.workers.dev/health
 ```
 
 Response includes AI Search availability:

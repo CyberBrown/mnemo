@@ -41,7 +41,7 @@ Include the `Authorization` header with your Bearer token:
 
 ```bash
 # Example: Load a GitHub repo with authentication
-curl -X POST https://mnemo.logosflux.io/tools/context_load \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-secret-token-here" \
   -d '{
@@ -50,7 +50,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_load \
   }'
 
 # Example: Query cached context
-curl -X POST https://mnemo.logosflux.io/tools/context_query \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-secret-token-here" \
   -d '{

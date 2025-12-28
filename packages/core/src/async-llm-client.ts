@@ -6,7 +6,7 @@ import { MnemoError } from './types';
  * Configuration for the async query client
  */
 export interface AsyncQueryConfig {
-  /** Base URL for the async query API (e.g., https://mnemo.logosflux.io) */
+  /** Base URL for the async query API (e.g., https://mnemo.solamp.workers.dev) */
   baseUrl: string;
   /** Polling interval in milliseconds (default: 1500ms) */
   pollIntervalMs?: number;

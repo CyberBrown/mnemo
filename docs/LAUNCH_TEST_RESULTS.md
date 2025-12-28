@@ -72,7 +72,7 @@
 
 ## Production URLs
 
-- **Primary:** https://mnemo.logosflux.io
+- **Primary:** https://mnemo.solamp.workers.dev
 - **Backup:** https://mnemo.solamp.workers.dev
-- **Health:** https://mnemo.logosflux.io/health
-- **Tools:** https://mnemo.logosflux.io/tools
+- **Health:** https://mnemo.solamp.workers.dev/health
+- **Tools:** https://mnemo.solamp.workers.dev/tools

@@ -1,6 +1,6 @@
 # Mnemo Live Testing Checklist
 
-**Live URL:** https://mnemo.logosflux.io
+**Live URL:** https://mnemo.solamp.workers.dev
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@
 ## Test 1: Health Check
 
 ```bash
-curl https://mnemo.logosflux.io/health
+curl https://mnemo.solamp.workers.dev/health
 ```
 
 **Expected:**
@@ -26,7 +26,7 @@ curl https://mnemo.logosflux.io/health
 ## Test 2: List Tools
 
 ```bash
-curl https://mnemo.logosflux.io/tools
+curl https://mnemo.solamp.workers.dev/tools
 ```
 
 **Expected:** JSON with 5 tools: `context_load`, `context_query`, `context_list`, `context_evict`, `context_stats`
@@ -36,7 +36,7 @@ curl https://mnemo.logosflux.io/tools
 ## Test 3: Load a Public GitHub Repo
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_load \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
   -H "Content-Type: application/json" \
   -d '{
     "source": "https://github.com/CyberBrown/mnemo",
@@ -51,7 +51,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_load \
 ## Test 4: Query the Cache
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_query \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
   -H "Content-Type: application/json" \
   -d '{
     "alias": "test-repo",
@@ -66,7 +66,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_query \
 ## Test 5: List Active Caches
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_list \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_list \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
@@ -78,7 +78,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_list \
 ## Test 6: Get Usage Statistics
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_stats \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_stats \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
@@ -94,7 +94,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_stats \
 ## Test 7: Composite Loading (NEW)
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_load \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
   -H "Content-Type: application/json" \
   -d '{
     "sources": [
@@ -115,7 +115,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_load \
 ## Test 8: Query Combined Cache
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_query \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
   -H "Content-Type: application/json" \
   -d '{
     "alias": "combined-test",
@@ -130,7 +130,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_query \
 ## Test 9: Private Repo (if you have one)
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_load \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_load \
   -H "Content-Type: application/json" \
   -d '{
     "source": "https://github.com/YOUR_ORG/private-repo",
@@ -146,7 +146,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_load \
 ## Test 10: Evict Cache
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_evict \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_evict \
   -H "Content-Type: application/json" \
   -d '{"alias": "test-repo"}'
 ```
@@ -158,7 +158,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_evict \
 ## Test 11: Verify Eviction
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/tools/context_query \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_query \
   -H "Content-Type: application/json" \
   -d '{
     "alias": "test-repo",
@@ -173,7 +173,7 @@ curl -X POST https://mnemo.logosflux.io/tools/context_query \
 ## Test 12: MCP Protocol (JSON-RPC)
 
 ```bash
-curl -X POST https://mnemo.logosflux.io/mcp \
+curl -X POST https://mnemo.solamp.workers.dev/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -203,11 +203,11 @@ After testing, clean up any remaining caches:
 
 ```bash
 # List remaining caches
-curl -X POST https://mnemo.logosflux.io/tools/context_list \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_list \
   -H "Content-Type: application/json" -d '{}'
 
 # Evict each one
-curl -X POST https://mnemo.logosflux.io/tools/context_evict \
+curl -X POST https://mnemo.solamp.workers.dev/tools/context_evict \
   -H "Content-Type: application/json" \
   -d '{"alias": "combined-test"}'
 ```

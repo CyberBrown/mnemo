@@ -8,7 +8,7 @@
   // Keep workers.dev enabled for fallback
   // Custom domains configured in Cloudflare dashboard (Settings > Domains & Routes)
   // - mnemo.distributedelectrons.com (internal)
-  // - mnemo.logosflux.io (public/open source)
+  // - mnemo.solamp.workers.dev (public/open source)
   "workers_dev": true,
 
   // Extended CPU time for long-running LLM queries (5 minutes max)

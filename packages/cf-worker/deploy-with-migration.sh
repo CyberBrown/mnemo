@@ -36,4 +36,4 @@ echo "Migration complete. Deploying to Cloudflare..."
 bun run deploy
 
 echo "Done! Test with:"
-echo "  curl https://mnemo.logosflux.io/health"
+echo "  curl https://mnemo.solamp.workers.dev/health"

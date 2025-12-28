@@ -90,7 +90,7 @@ Protected endpoints require:
 ### Flow 1: Public Endpoint (Always Works)
 ```
 GET /health HTTP/1.1
-Host: mnemo.logosflux.io
+Host: mnemo.solamp.workers.dev
 
 ↓
 
@@ -107,7 +107,7 @@ Content-Type: application/json
 ### Flow 2: Protected Endpoint - No Auth Header
 ```
 POST /tools/context_list HTTP/1.1
-Host: mnemo.logosflux.io
+Host: mnemo.solamp.workers.dev
 Content-Type: application/json
 
 {}
@@ -126,7 +126,7 @@ Content-Type: application/json
 ### Flow 3: Protected Endpoint - Invalid Token
 ```
 POST /tools/context_list HTTP/1.1
-Host: mnemo.logosflux.io
+Host: mnemo.solamp.workers.dev
 Content-Type: application/json
 Authorization: Bearer wrong-token
 
@@ -146,7 +146,7 @@ Content-Type: application/json
 ### Flow 4: Protected Endpoint - Valid Token
 ```
 POST /tools/context_list HTTP/1.1
-Host: mnemo.logosflux.io
+Host: mnemo.solamp.workers.dev
 Content-Type: application/json
 Authorization: Bearer secret-token-123
 
