@@ -700,10 +700,8 @@ export async function handleContextQuery(
   const { geminiClient, storage, asyncQueryConfig, repoIndexStorage, vectorizeClient, embeddingClient, tieredQueryHandler } = deps;
 
   // Priority 1: Try tiered AI Search query (v0.4)
-  // TEMPORARILY DISABLED - TieredQueryHandler has issues with cache name vs alias
-  // TODO: Fix TieredQueryHandler to properly resolve alias to cache name
-  // See: https://github.com/CyberBrown/mnemo/issues/XXX
-  const TIERED_QUERY_ENABLED = false;
+  // Fixed: TieredQueryHandler now resolves alias → cache name via CacheStorage
+  const TIERED_QUERY_ENABLED = true;
   if (TIERED_QUERY_ENABLED && tieredQueryHandler) {
     try {
       // Check if AI Search is truly available (has indexed content)

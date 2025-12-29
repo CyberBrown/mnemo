@@ -14,7 +14,7 @@
 import { z } from 'zod';
 import type { AISearchClient, AISearchResult, AISearchChunk } from './ai-search-client';
 import type { LLMClient } from './llm-client';
-import type { QueryResult } from './types';
+import type { QueryResult, CacheStorage } from './types';
 
 // ============================================================================
 // Types
@@ -65,6 +65,8 @@ export interface TieredQueryConfig {
   aiSearch: AISearchClient;
   /** LLM client for Layer 2 (FallbackLLMClient or similar) */
   llmClient: LLMClient;
+  /** Cache storage for alias → cache name resolution */
+  storage: CacheStorage;
   /** Nemotron endpoint URL for RAG synthesis */
   localModelUrl: string;
   /** Nemotron model name */
@@ -108,6 +110,7 @@ export interface TieredQueryConfig {
 export class TieredQueryHandler {
   private aiSearch: AISearchClient;
   private llmClient: LLMClient;
+  private storage: CacheStorage;
   private localModelUrl: string;
   private localModelName: string;
   private defaultConfidenceThreshold: number;
@@ -116,6 +119,7 @@ export class TieredQueryHandler {
   constructor(config: TieredQueryConfig) {
     this.aiSearch = config.aiSearch;
     this.llmClient = config.llmClient;
+    this.storage = config.storage;
     this.localModelUrl = config.localModelUrl;
     this.localModelName = config.localModelName ?? 'nemotron-3-nano';
     this.defaultConfidenceThreshold = config.defaultConfidenceThreshold ?? 0.7;
@@ -255,7 +259,19 @@ Answer based on the context above:`;
     query: string,
     options: { maxOutputTokens?: number; temperature?: number }
   ): Promise<TieredQueryResult> {
-    const result = await this.llmClient.queryCache(alias, query, {
+    // Resolve alias to cache name
+    const cache = await this.storage.getByAlias(alias);
+    if (!cache) {
+      throw new Error(`Cache not found for alias: ${alias}`);
+    }
+
+    // Check if cache is expired
+    if (new Date() > cache.expiresAt) {
+      throw new Error(`Cache '${alias}' has expired. Call context_refresh to reload it.`);
+    }
+
+    // Use the actual cache name (not alias) for the LLM query
+    const result = await this.llmClient.queryCache(cache.name, query, {
       maxOutputTokens: options.maxOutputTokens,
       temperature: options.temperature,
     });
@@ -310,12 +326,14 @@ Answer based on the context above:`;
 export function createTieredQueryHandler(
   aiSearch: AISearchClient,
   llmClient: LLMClient,
+  storage: CacheStorage,
   localModelUrl: string,
-  options?: Partial<TieredQueryConfig>
+  options?: Partial<Omit<TieredQueryConfig, 'aiSearch' | 'llmClient' | 'storage' | 'localModelUrl'>>
 ): TieredQueryHandler {
   return new TieredQueryHandler({
     aiSearch,
     llmClient,
+    storage,
     localModelUrl,
     ...options,
   });

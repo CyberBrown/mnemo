@@ -861,7 +861,7 @@ function createMCPServer(env: Env): MnemoMCPServer {
   const confidenceThreshold = parseFloat(env.AI_SEARCH_CONFIDENCE_THRESHOLD ?? '0.7');
   const aiSearchClient = env.AI ? new CloudflareAISearchAdapter(env.AI, aiSearchName) : undefined;
   const tieredQueryHandler = aiSearchClient
-    ? createTieredQueryHandler(aiSearchClient, llmClient, LOCAL_MODEL_URL, {
+    ? createTieredQueryHandler(aiSearchClient, llmClient, storage, LOCAL_MODEL_URL, {
         localModelName: LOCAL_MODEL_NAME,
         defaultConfidenceThreshold: confidenceThreshold,
         timeout: 120000,
