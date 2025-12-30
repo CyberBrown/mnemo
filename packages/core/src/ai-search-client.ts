@@ -26,6 +26,17 @@ interface CloudflareAi {
       reranking?: { enabled?: boolean; model?: string };
       filters?: Record<string, unknown>;
     }): Promise<CFAISearchResponse>;
+    aiSearch(options: {
+      query: string;
+      model?: string;
+      system_prompt?: string;
+      rewrite_query?: boolean;
+      max_num_results?: number;
+      ranking_options?: { score_threshold?: number };
+      reranking?: { enabled?: boolean; model?: string };
+      stream?: boolean;
+      filters?: Record<string, unknown>;
+    }): Promise<CFAISearchWithGenerationResponse>;
   };
 }
 
@@ -78,6 +89,28 @@ export const AISearchOptionsSchema = z.object({
 
 export type AISearchOptions = z.infer<typeof AISearchOptionsSchema>;
 
+export const AISearchGenerationOptionsSchema = AISearchOptionsSchema.extend({
+  /** Workers AI model for generation (default: @cf/meta/llama-3.3-70b-instruct-fp8-fast) */
+  model: z.string().optional(),
+  /** Custom system prompt for answer generation */
+  systemPrompt: z.string().optional(),
+});
+
+export type AISearchGenerationOptions = z.infer<typeof AISearchGenerationOptionsSchema>;
+
+export const AISearchWithGenerationResultSchema = z.object({
+  /** Generated response from Workers AI */
+  response: z.string(),
+  /** Source chunks used for generation */
+  sources: z.array(AISearchChunkSchema),
+  /** The query used (possibly rewritten) */
+  searchQuery: z.string().optional(),
+  /** Time taken for the request in ms */
+  latencyMs: z.number().optional(),
+});
+
+export type AISearchWithGenerationResult = z.infer<typeof AISearchWithGenerationResultSchema>;
+
 // ============================================================================
 // AI Search Client Interface
 // ============================================================================
@@ -91,15 +124,12 @@ export interface AISearchClient {
   search(query: string, options?: AISearchOptions): Promise<AISearchResult>;
 
   /**
-   * Search and generate a response (full RAG pipeline)
-   * Uses AI Search's built-in LLM for synthesis
+   * Search and generate a response using Workers AI (fast edge synthesis)
+   * This is the fast path that avoids self-hosted LLM latency
    * @param query Natural language query
-   * @param options Search options
+   * @param options Generation options including model and system prompt
    */
-  aiSearch?(query: string, options?: AISearchOptions): Promise<{
-    response: string;
-    sources: AISearchChunk[];
-  }>;
+  aiSearch(query: string, options?: AISearchGenerationOptions): Promise<AISearchWithGenerationResult>;
 
   /**
    * Check if the AI Search instance is available
@@ -119,6 +149,23 @@ interface CFAISearchResponse {
     content: string;
     filename: string;
     score: number;
+    metadata?: Record<string, unknown>;
+  }>;
+}
+
+/**
+ * Response format from CF AI Search aiSearch() method (with generation)
+ */
+interface CFAISearchWithGenerationResponse {
+  /** Generated answer from Workers AI */
+  response: string;
+  /** The (optionally rewritten) query used for search */
+  search_query: string;
+  /** Retrieved chunks used for generation */
+  data: Array<{
+    filename: string;
+    score: number;
+    content: string;
     metadata?: Record<string, unknown>;
   }>;
 }
@@ -155,11 +202,12 @@ export class CloudflareAISearchAdapter implements AISearchClient {
     } = options;
 
     // Build filter for folder-based scoping (multitenancy)
+    // Note: R2 metadata uses 'alias' field, so we filter by that
     let searchFilter: Record<string, unknown> | undefined;
     if (folder) {
       searchFilter = {
         type: 'eq',
-        key: 'folder',
+        key: 'alias',  // Match R2 customMetadata.alias
         value: folder,
       };
     } else if (filter) {
@@ -218,6 +266,83 @@ export class CloudflareAISearchAdapter implements AISearchClient {
           confidence: 0,
           count: 0,
         };
+      }
+      throw error;
+    }
+  }
+
+  async aiSearch(
+    query: string,
+    options: AISearchGenerationOptions = {}
+  ): Promise<AISearchWithGenerationResult> {
+    const {
+      maxResults = 10,
+      scoreThreshold = 0,
+      rewriteQuery = true,
+      reranking = true,
+      folder,
+      filter,
+      model = '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      systemPrompt,
+    } = options;
+
+    // Build filter for folder-based scoping (multitenancy)
+    // Note: AI Search may not preserve R2 custom metadata for filtering
+    // For now, skip folder filtering and search all indexed content
+    // TODO: Investigate if AI Search supports metadata-based filtering
+    let searchFilter: Record<string, unknown> | undefined;
+    if (filter) {
+      const filterKeys = Object.keys(filter);
+      if (filterKeys.length === 1) {
+        searchFilter = {
+          type: 'eq',
+          key: filterKeys[0],
+          value: filter[filterKeys[0]],
+        };
+      }
+    }
+
+    const startTime = Date.now();
+
+    try {
+      const autorag = this.ai.autorag(this.instanceName);
+
+      const response: CFAISearchWithGenerationResponse = await autorag.aiSearch({
+        query,
+        model,
+        system_prompt: systemPrompt,
+        rewrite_query: rewriteQuery,
+        max_num_results: maxResults,
+        ranking_options: {
+          score_threshold: scoreThreshold,
+        },
+        reranking: {
+          enabled: reranking,
+          model: '@cf/baai/bge-reranker-base',
+        },
+        ...(searchFilter && { filters: searchFilter }),
+      });
+
+      const latencyMs = Date.now() - startTime;
+
+      // Transform sources to our schema
+      const sources: AISearchChunk[] = (response.data || []).map((item) => ({
+        content: item.content,
+        score: item.score,
+        filename: item.filename,
+        folder: this.extractFolder(item.filename),
+        metadata: item.metadata,
+      }));
+
+      return {
+        response: response.response,
+        sources,
+        searchQuery: response.search_query,
+        latencyMs,
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not found')) {
+        console.warn(`AI Search instance '${this.instanceName}' not found for aiSearch`);
       }
       throw error;
     }
@@ -339,6 +464,19 @@ export class MockAISearchClient implements AISearchClient {
       chunks: matches,
       confidence,
       count: matches.length,
+    };
+  }
+
+  async aiSearch(
+    query: string,
+    options: AISearchGenerationOptions = {}
+  ): Promise<AISearchWithGenerationResult> {
+    const searchResult = await this.search(query, options);
+    return {
+      response: `Mock response for: ${query}`,
+      sources: searchResult.chunks,
+      searchQuery: query,
+      latencyMs: 100,
     };
   }
 

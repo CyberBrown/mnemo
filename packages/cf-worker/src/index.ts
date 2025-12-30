@@ -859,18 +859,22 @@ function createMCPServer(env: Env): MnemoMCPServer {
   // AI Search tiered query (v0.4) - create if AI binding is available
   const aiSearchName = env.AI_SEARCH_NAME ?? 'mnemo-search';
   const confidenceThreshold = parseFloat(env.AI_SEARCH_CONFIDENCE_THRESHOLD ?? '0.7');
+  const useEdgeSynthesis = env.AI_SEARCH_USE_EDGE_SYNTHESIS !== 'false';
+  const edgeSynthesisModel = env.AI_SEARCH_EDGE_MODEL ?? '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
   const aiSearchClient = env.AI ? new CloudflareAISearchAdapter(env.AI, aiSearchName) : undefined;
   const tieredQueryHandler = aiSearchClient
     ? createTieredQueryHandler(aiSearchClient, llmClient, storage, LOCAL_MODEL_URL, {
         localModelName: LOCAL_MODEL_NAME,
         defaultConfidenceThreshold: confidenceThreshold,
         timeout: 120000,
+        useEdgeSynthesis,
+        edgeSynthesisModel,
       })
     : undefined;
 
   // Log AI Search configuration
   if (aiSearchClient) {
-    console.log(`AI Search configured: ${aiSearchName} (threshold: ${confidenceThreshold})`);
+    console.log(`AI Search configured: ${aiSearchName} (threshold: ${confidenceThreshold}, edge synthesis: ${useEdgeSynthesis})`);
   } else {
     console.log('AI Search not configured - using fallback query methods');
   }

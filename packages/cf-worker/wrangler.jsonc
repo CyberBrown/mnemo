@@ -75,7 +75,10 @@
     // AI Search (tiered RAG) configuration
     "AI_SEARCH_NAME": "mnemo-search",
     "AI_SEARCH_CONFIDENCE_THRESHOLD": "0.7",
-    "AI_SEARCH_MAX_RESULTS": "10"
+    "AI_SEARCH_MAX_RESULTS": "10",
+    // Edge synthesis: use Workers AI instead of Nemotron for fast responses
+    "AI_SEARCH_USE_EDGE_SYNTHESIS": "true",
+    "AI_SEARCH_EDGE_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
   },
 
   // Secrets (set via wrangler secret put)

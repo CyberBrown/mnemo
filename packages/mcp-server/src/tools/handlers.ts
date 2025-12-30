@@ -700,42 +700,29 @@ export async function handleContextQuery(
   const { geminiClient, storage, asyncQueryConfig, repoIndexStorage, vectorizeClient, embeddingClient, tieredQueryHandler } = deps;
 
   // Priority 1: Try tiered AI Search query (v0.4)
-  // Fixed: TieredQueryHandler now resolves alias → cache name via CacheStorage
-  const TIERED_QUERY_ENABLED = true;
-  if (TIERED_QUERY_ENABLED && tieredQueryHandler) {
+  if (tieredQueryHandler) {
     try {
       // Check if AI Search is truly available (has indexed content)
       const aiSearchAvailable = await tieredQueryHandler.isAISearchAvailable();
       if (aiSearchAvailable) {
-        try {
-          return await queryViaTieredHandler(deps, input.alias, input.query, {
-            maxTokens: input.maxTokens,
-            temperature: input.temperature,
-            forceFullContext: input.forceFullContext,
-          });
-        } catch (tieredError) {
-          // Tiered query failed (e.g., low confidence, fallback LLM error)
-          // Fall through to other query methods
-          console.warn('Tiered query execution failed, trying other methods:', tieredError);
-        }
-      } else {
-        // AI Search not available, fall through to other methods
-        console.log('AI Search not available, falling back to other query methods');
+        const result = await queryViaTieredHandler(deps, input.alias, input.query, {
+          maxTokens: input.maxTokens,
+          temperature: input.temperature,
+          forceFullContext: input.forceFullContext,
+        });
+        return result;
       }
     } catch (error) {
-      console.warn('AI Search availability check failed:', error);
-      // Continue with fallback methods
+      // Tiered query failed, fall through to other methods
+      console.warn('[TieredQuery] Failed, falling back:', (error as Error).message);
     }
   }
 
   // Priority 2: Check if there's a vector index for this alias (v0.3 RAG)
-  console.log(`[MNEMO DEBUG] Checking Priority 2 for alias: ${input.alias}`);
   if (repoIndexStorage && vectorizeClient && embeddingClient) {
     const repoIndex = await repoIndexStorage.getByAlias(input.alias);
-    console.log(`[MNEMO DEBUG] Repo index found: ${JSON.stringify(repoIndex ? { alias: repoIndex.alias, status: repoIndex.status } : null)}`);
     if (repoIndex && repoIndex.status === 'active') {
       // Use RAG-based query
-      console.log(`[MNEMO DEBUG] Using RAG via vector search`);
       return queryViaVectorSearch(deps, input.alias, input.query, {
         maxTokens: input.maxTokens,
         temperature: input.temperature,
@@ -744,9 +731,7 @@ export async function handleContextQuery(
   }
 
   // Priority 3: Fall back to cache-based query
-  console.log(`[MNEMO DEBUG] Using Priority 3 (cache-based query) for alias: ${input.alias}`);
   const cache = await storage.getByAlias(input.alias);
-  console.log(`[MNEMO DEBUG] Cache metadata: ${JSON.stringify(cache ? { name: cache.name, alias: cache.alias, model: cache.model } : null)}`);
   if (!cache) {
     throw new CacheNotFoundError(input.alias);
   }

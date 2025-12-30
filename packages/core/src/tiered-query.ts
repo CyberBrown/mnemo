@@ -12,7 +12,12 @@
  */
 
 import { z } from 'zod';
-import type { AISearchClient, AISearchResult, AISearchChunk } from './ai-search-client';
+import type {
+  AISearchClient,
+  AISearchResult,
+  AISearchChunk,
+  AISearchWithGenerationResult,
+} from './ai-search-client';
 import type { LLMClient } from './llm-client';
 import type { QueryResult, CacheStorage } from './types';
 
@@ -75,6 +80,10 @@ export interface TieredQueryConfig {
   defaultConfidenceThreshold?: number;
   /** Request timeout in ms */
   timeout?: number;
+  /** Use aiSearch() for fast edge synthesis (default: true) */
+  useEdgeSynthesis?: boolean;
+  /** Workers AI model for edge synthesis */
+  edgeSynthesisModel?: string;
 }
 
 /**
@@ -115,6 +124,8 @@ export class TieredQueryHandler {
   private localModelName: string;
   private defaultConfidenceThreshold: number;
   private timeout: number;
+  private useEdgeSynthesis: boolean;
+  private edgeSynthesisModel: string;
 
   constructor(config: TieredQueryConfig) {
     this.aiSearch = config.aiSearch;
@@ -124,6 +135,8 @@ export class TieredQueryHandler {
     this.localModelName = config.localModelName ?? 'nemotron-3-nano';
     this.defaultConfidenceThreshold = config.defaultConfidenceThreshold ?? 0.7;
     this.timeout = config.timeout ?? 120000;
+    this.useEdgeSynthesis = config.useEdgeSynthesis ?? true;
+    this.edgeSynthesisModel = config.edgeSynthesisModel ?? '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
   }
 
   /**
@@ -151,7 +164,48 @@ export class TieredQueryHandler {
       return this.queryFullContext(alias, query, { maxOutputTokens, temperature });
     }
 
-    // Layer 1: Try AI Search RAG
+    // Layer 1A: Try AI Search with edge synthesis (fast path using Workers AI)
+    if (this.useEdgeSynthesis) {
+      try {
+        const result = await this.aiSearch.aiSearch(query, {
+          // Note: folder filtering disabled in aiSearch - searches all indexed content
+          maxResults: maxRagChunks,
+          rewriteQuery: true,
+          reranking: true,
+          model: this.edgeSynthesisModel,
+          systemPrompt,
+        });
+
+        if (result.response && result.sources.length > 0) {
+          const confidence = this.calculateConfidenceFromSources(result.sources);
+
+          // Accept aiSearch response if we have sources - Workers AI already determined relevance
+          // Only require confidence threshold if we have very few sources (< 3)
+          const minConfidenceForFewSources = result.sources.length < 3 ? confidenceThreshold : 0.3;
+
+          if (confidence >= minConfidenceForFewSources) {
+            console.log(
+              `[aiSearch] ${result.latencyMs}ms, confidence: ${confidence.toFixed(2)}, sources: ${result.sources.length}`
+            );
+            return {
+              response: result.response,
+              source: 'rag',
+              model: this.edgeSynthesisModel,
+              ragConfidence: confidence,
+              ragChunks: result.sources.length,
+              tokensUsed: this.estimateTokensFromResult(result),
+            };
+          }
+
+          // Very low confidence even with aiSearch - fall through to Nemotron
+          console.log(`[aiSearch] Low confidence ${confidence.toFixed(2)}, falling back to Nemotron`);
+        }
+      } catch (error) {
+        console.warn('[aiSearch] Failed:', (error as Error).message);
+      }
+    }
+
+    // Layer 1B: Fallback to AI Search + Nemotron synthesis
     try {
       const ragResult = await this.aiSearch.search(query, {
         folder: alias,
@@ -306,6 +360,34 @@ Answer based on the context above:`;
     );
     const responseTokens = Math.ceil(response.length / 4);
     return contextTokens + responseTokens;
+  }
+
+  /**
+   * Calculate confidence from aiSearch sources
+   * Uses weighted average of top 3 scores
+   */
+  private calculateConfidenceFromSources(sources: AISearchChunk[]): number {
+    if (sources.length === 0) return 0;
+    const weights = [0.5, 0.3, 0.2];
+    let weightedSum = 0;
+    let weightSum = 0;
+    sources.slice(0, 3).forEach((s, i) => {
+      const w = weights[i] || 0.1;
+      weightedSum += s.score * w;
+      weightSum += w;
+    });
+    return weightSum > 0 ? weightedSum / weightSum : 0;
+  }
+
+  /**
+   * Estimate tokens from aiSearch result
+   */
+  private estimateTokensFromResult(result: AISearchWithGenerationResult): number {
+    const contextTokens = result.sources.reduce(
+      (sum, s) => sum + Math.ceil(s.content.length / 4),
+      0
+    );
+    return contextTokens + Math.ceil(result.response.length / 4);
   }
 
   /**
