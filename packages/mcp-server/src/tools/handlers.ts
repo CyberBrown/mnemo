@@ -16,6 +16,7 @@ import {
   calculateCost,
   UrlAdapter,
   isGenericUrl,
+  ClaudeHistoryAdapter,
   MnemoError,
   // RAG support
   chunkLoadedSource,
@@ -137,6 +138,15 @@ async function loadSingleSource(
   githubToken?: string
 ): Promise<LoadedSource> {
   const { repoLoader, sourceLoader, urlAdapter } = deps;
+
+  // Claude Code history: "claude-history:///path" or path containing .claude/projects
+  if (source.startsWith('claude-history://') || source.includes('.claude/projects')) {
+    const adapter = new ClaudeHistoryAdapter();
+    const path = source.startsWith('claude-history://')
+      ? source.replace('claude-history://', '')
+      : source;
+    return adapter.load({ type: 'claude-history', path });
+  }
 
   if (isGitHubUrl(source)) {
     return loadGitHubRepoViaAPI(source, { githubToken });

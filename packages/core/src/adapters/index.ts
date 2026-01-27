@@ -5,6 +5,7 @@
 export * from './base';
 export * from './docs-crawler';
 export * from './url-adapter';
+export * from './claude-history';
 export * from './extractors';
 export * from './url-adapter/crawler';
 export * from './url-adapter/robots';
