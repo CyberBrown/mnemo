@@ -121,6 +121,17 @@ describe('ClaudeHistoryAdapter', () => {
     const tmpProject = join(tmpDir, '-tmp');
     await mkdir(tmpProject, { recursive: true });
     await writeFile(join(tmpProject, 'sessions-index.json'), JSON.stringify({ version: 1, entries: [] }));
+
+    // Create a project directory WITHOUT sessions-index.json (index-less)
+    const noIndexDir = join(tmpDir, '-home-user-projects-other');
+    await mkdir(noIndexDir, { recursive: true });
+    const noIndexSession = [
+      JSON.stringify({ type: 'summary', summary: 'Worked on indexless project' }),
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'help with indexless' } }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Sure, here is help.' }] } }),
+    ];
+    await writeFile(join(noIndexDir, 'session-no-idx.jsonl'), noIndexSession.join('\n'));
+    await writeFile(join(noIndexDir, 'agent-xyz.jsonl'), noIndexSession.join('\n'));
   });
 
   afterAll(async () => {
@@ -138,9 +149,21 @@ describe('ClaudeHistoryAdapter', () => {
 
   test('loads project directory with sessions', async () => {
     const result = await adapter.load({ type: 'claude-history', path: tmpDir });
-    expect(result.fileCount).toBe(2); // abc-123 and def-456, not sidechain
-    expect(result.metadata.projectCount).toBe(1);
-    expect(result.metadata.sessionCount).toBe(2);
+    // abc-123 + def-456 (from indexed project) + session-no-idx (from index-less project)
+    expect(result.fileCount).toBe(3);
+    expect(result.metadata.projectCount).toBe(2);
+    expect(result.metadata.sessionCount).toBe(3);
+  });
+
+  test('loads sessions from directories without sessions-index.json', async () => {
+    const result = await adapter.load({ type: 'claude-history', path: tmpDir });
+    const noIdxSession = result.files.find((f) => f.path.includes('session-no-idx'));
+    expect(noIdxSession).toBeDefined();
+    expect(noIdxSession!.content).toContain('Worked on indexless project');
+    expect(noIdxSession!.content).toContain('help with indexless');
+    // Agent files excluded by default even in index-less dirs
+    const agentInNoIdx = result.files.find((f) => f.path.includes('-home-user-projects-other/agent-'));
+    expect(agentInNoIdx).toBeUndefined();
   });
 
   test('parses session content correctly', async () => {
@@ -197,9 +220,11 @@ describe('ClaudeHistoryAdapter', () => {
       path: tmpDir,
       options: { since: '2025-06-01T00:00:00.000Z' },
     });
-    // Only abc-123 (Dec 2025), not def-456 (Jan 2025)
-    expect(result.fileCount).toBe(1);
-    expect(result.files[0].path).toContain('abc-123');
+    // abc-123 (Dec 2025) + index-less session (just created), not def-456 (Jan 2025)
+    expect(result.fileCount).toBe(2);
+    const paths = result.files.map((f) => f.path);
+    expect(paths.some((p) => p.includes('abc-123'))).toBe(true);
+    expect(paths.some((p) => p.includes('def-456'))).toBe(false);
   });
 
   test('truncates long messages', async () => {

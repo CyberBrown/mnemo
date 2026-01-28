@@ -95,7 +95,10 @@ export class ClaudeHistoryAdapter implements SourceAdapter {
         if (!opts.includeTemp && entry.name === '-tmp') continue;
         if (opts.projectFilter && !opts.projectFilter.includes(entry.name)) continue;
         const dirPath = join(sourcePath, entry.name);
+        // Include dirs with sessions-index.json OR any .jsonl files
         if (await fileExists(join(dirPath, 'sessions-index.json'))) {
+          projectDirs.push({ name: entry.name, path: dirPath });
+        } else if (await hasJsonlFiles(dirPath)) {
           projectDirs.push({ name: entry.name, path: dirPath });
         }
       }
@@ -131,39 +134,89 @@ export class ClaudeHistoryAdapter implements SourceAdapter {
   ): Promise<FileInfo[]> {
     const files: FileInfo[] = [];
 
-    let index: SessionsIndex;
+    let index: SessionsIndex | null = null;
     try {
       const raw = await readFile(join(project.path, 'sessions-index.json'), 'utf-8');
       index = JSON.parse(raw) as SessionsIndex;
     } catch {
-      return files;
+      // No index file — will fall back to scanning .jsonl files
     }
 
-    for (const entry of index.entries) {
-      // Filter by date
-      if (sinceDate && entry.modified) {
-        if (new Date(entry.modified) < sinceDate) continue;
+    if (index) {
+      // Use index for rich metadata
+      for (const entry of index.entries) {
+        if (sinceDate && entry.modified) {
+          if (new Date(entry.modified) < sinceDate) continue;
+        }
+        if (entry.isSidechain) continue;
+
+        const sessionFile = join(project.path, `${entry.sessionId}.jsonl`);
+        if (!(await fileExists(sessionFile))) continue;
+
+        try {
+          const content = await this.parseSession(sessionFile, entry, project.name, maxContent);
+          if (!content) continue;
+          const size = Buffer.byteLength(content, 'utf-8');
+          files.push({
+            path: `${project.name}/${entry.sessionId}`,
+            content,
+            size,
+            tokenEstimate: Math.ceil(size / 4),
+          });
+        } catch {
+          // Skip malformed sessions
+        }
       }
+    } else {
+      // No index — discover sessions from .jsonl files directly
+      const dirEntries = await readdir(project.path);
+      for (const fname of dirEntries) {
+        if (!fname.endsWith('.jsonl')) continue;
+        if (fname.startsWith('agent-') && !opts.includeAgents) continue;
 
-      // Skip sidechains (sub-sessions spawned by agent)
-      if (entry.isSidechain) continue;
+        const filePath = join(project.path, fname);
+        const sessionId = fname.replace('.jsonl', '');
 
-      const sessionFile = join(project.path, `${entry.sessionId}.jsonl`);
-      if (!(await fileExists(sessionFile))) continue;
+        // Filter by file mtime if sinceDate is set
+        if (sinceDate) {
+          const fstat = await stat(filePath);
+          if (fstat.mtime < sinceDate) continue;
+        }
 
-      try {
-        const content = await this.parseSession(sessionFile, entry, project.name, maxContent);
-        if (!content) continue;
+        try {
+          // Build minimal metadata from the file itself
+          const entry: SessionIndexEntry = {
+            sessionId,
+            fullPath: filePath,
+            fileMtime: Date.now(),
+            projectPath: project.name,
+          };
+          // Extract summary from first summary line if present
+          const raw = await readFile(filePath, 'utf-8');
+          const firstLine = raw.split('\n')[0];
+          try {
+            const parsed = JSON.parse(firstLine);
+            if (parsed.type === 'summary' && parsed.summary) {
+              entry.summary = parsed.summary;
+            }
+          } catch { /* ignore */ }
 
-        const size = Buffer.byteLength(content, 'utf-8');
-        files.push({
-          path: `${project.name}/${entry.sessionId}`,
-          content,
-          size,
-          tokenEstimate: Math.ceil(size / 4),
-        });
-      } catch {
-        // Skip malformed sessions
+          const isAgent = fname.startsWith('agent-');
+          const content = isAgent
+            ? await this.parseAgentSession(filePath, sessionId, project.name, maxContent)
+            : await this.parseSession(filePath, entry, project.name, maxContent);
+          if (!content) continue;
+
+          const size = Buffer.byteLength(content, 'utf-8');
+          files.push({
+            path: `${project.name}/${sessionId}`,
+            content,
+            size,
+            tokenEstimate: Math.ceil(size / 4),
+          });
+        } catch {
+          // Skip malformed
+        }
       }
     }
 
@@ -332,6 +385,15 @@ function extractAssistantText(parsed: Record<string, unknown>): string | null {
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen) + '\n[...truncated]';
+}
+
+async function hasJsonlFiles(dirPath: string): Promise<boolean> {
+  try {
+    const entries = await readdir(dirPath);
+    return entries.some((e) => e.endsWith('.jsonl') && !e.startsWith('agent-'));
+  } catch {
+    return false;
+  }
 }
 
 async function fileExists(path: string): Promise<boolean> {

@@ -179,6 +179,15 @@ interface ParsedFile {
   tokenEstimate: number;
 }
 
+async function hasJsonlFiles(dirPath: string): Promise<boolean> {
+  try {
+    const entries = await readdir(dirPath);
+    return entries.some((e) => e.endsWith('.jsonl') && !e.startsWith('agent-'));
+  } catch {
+    return false;
+  }
+}
+
 async function fileExists(path: string): Promise<boolean> {
   try {
     await stat(path);
@@ -313,54 +322,86 @@ async function loadHistory(sinceDate?: Date): Promise<{ files: ParsedFile[]; pro
       const dirPath = join(sourcePath, entry.name);
       if (await fileExists(join(dirPath, 'sessions-index.json'))) {
         projectDirs.push({ name: entry.name, path: dirPath });
+      } else if (await hasJsonlFiles(dirPath)) {
+        projectDirs.push({ name: entry.name, path: dirPath });
       }
     }
   }
 
   for (const project of projectDirs) {
-    let index: { entries: SessionIndexEntry[] };
+    let index: { entries: SessionIndexEntry[] } | null = null;
     try {
       const raw = await readFile(join(project.path, 'sessions-index.json'), 'utf-8');
       index = JSON.parse(raw);
     } catch {
-      continue;
+      // No index — will scan .jsonl files directly
     }
 
-    for (const entry of index.entries) {
-      if (sinceDate && entry.modified && new Date(entry.modified) < sinceDate) continue;
-      if (entry.isSidechain) continue;
+    if (index) {
+      for (const entry of index.entries) {
+        if (sinceDate && entry.modified && new Date(entry.modified) < sinceDate) continue;
+        if (entry.isSidechain) continue;
 
-      const sessionFile = join(project.path, `${entry.sessionId}.jsonl`);
-      if (!(await fileExists(sessionFile))) continue;
+        const sessionFile = join(project.path, `${entry.sessionId}.jsonl`);
+        if (!(await fileExists(sessionFile))) continue;
 
-      try {
-        const content = await parseSession(sessionFile, entry, project.name);
-        if (!content) continue;
-        const size = Buffer.byteLength(content, 'utf-8');
-        files.push({
-          path: `${project.name}/${entry.sessionId}`,
-          content,
-          size,
-          tokenEstimate: Math.ceil(size / 4),
-        });
-      } catch {
-        // Skip malformed
-      }
-    }
-
-    if (includeAgents) {
-      const dirEntries = await readdir(project.path);
-      for (const fname of dirEntries) {
-        if (!fname.startsWith('agent-') || !fname.endsWith('.jsonl')) continue;
-        const agentId = fname.replace('.jsonl', '');
         try {
-          const content = await parseAgentSession(join(project.path, fname), agentId, project.name);
+          const content = await parseSession(sessionFile, entry, project.name);
           if (!content) continue;
           const size = Buffer.byteLength(content, 'utf-8');
-          files.push({ path: `${project.name}/${agentId}`, content, size, tokenEstimate: Math.ceil(size / 4) });
+          files.push({ path: `${project.name}/${entry.sessionId}`, content, size, tokenEstimate: Math.ceil(size / 4) });
         } catch {
-          // Skip
+          // Skip malformed
         }
+      }
+
+      if (includeAgents) {
+        const dirEntries = await readdir(project.path);
+        for (const fname of dirEntries) {
+          if (!fname.startsWith('agent-') || !fname.endsWith('.jsonl')) continue;
+          const agentId = fname.replace('.jsonl', '');
+          try {
+            const content = await parseAgentSession(join(project.path, fname), agentId, project.name);
+            if (!content) continue;
+            const size = Buffer.byteLength(content, 'utf-8');
+            files.push({ path: `${project.name}/${agentId}`, content, size, tokenEstimate: Math.ceil(size / 4) });
+          } catch { /* Skip */ }
+        }
+      }
+    } else {
+      // No index — discover sessions from .jsonl files
+      const dirEntries = await readdir(project.path);
+      for (const fname of dirEntries) {
+        if (!fname.endsWith('.jsonl')) continue;
+        if (fname.startsWith('agent-') && !includeAgents) continue;
+
+        const filePath = join(project.path, fname);
+        const sessionId = fname.replace('.jsonl', '');
+
+        if (sinceDate) {
+          const fstat = await stat(filePath);
+          if (fstat.mtime < sinceDate) continue;
+        }
+
+        try {
+          const entry: SessionIndexEntry = { sessionId, projectPath: project.name };
+          // Try to extract summary from first line
+          const raw = await readFile(filePath, 'utf-8');
+          const firstLine = raw.split('\n')[0];
+          try {
+            const parsed = JSON.parse(firstLine);
+            if (parsed.type === 'summary' && parsed.summary) entry.summary = parsed.summary;
+          } catch { /* ignore */ }
+
+          const isAgent = fname.startsWith('agent-');
+          const content = isAgent
+            ? await parseAgentSession(filePath, sessionId, project.name)
+            : await parseSession(filePath, entry, project.name);
+          if (!content) continue;
+
+          const size = Buffer.byteLength(content, 'utf-8');
+          files.push({ path: `${project.name}/${sessionId}`, content, size, tokenEstimate: Math.ceil(size / 4) });
+        } catch { /* Skip */ }
       }
     }
   }
