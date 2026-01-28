@@ -70,7 +70,7 @@ const maxContent = parseInt(getArg('max-content') ?? '2000');
 
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
 const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
-const BUCKET_NAME = process.env.R2_BUCKET_NAME ?? 'mnemo-content';
+const BUCKET_NAME = process.env.R2_BUCKET_NAME ?? 'mnemo-files';
 const SYNC_DIR = process.env.MNEMO_SYNC_DIR ?? join(homedir(), '.mnemo');
 const STATE_FILE = join(SYNC_DIR, 'sync-state.json');
 
