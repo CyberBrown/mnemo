@@ -109,6 +109,14 @@ async function main() {
         break;
       }
 
+      case 'seed-history': {
+        // Delegate to seed-history script, passing remaining args
+        const seedArgs = args.slice(1);
+        process.argv = ['bun', 'seed-history', ...seedArgs];
+        await import('./seed-history');
+        break;
+      }
+
       case 'health': {
         const response = await fetch(`${MNEMO_URL}/health`);
         const data = await response.json();
@@ -129,6 +137,7 @@ Usage:
 Commands:
   serve                     Start the Mnemo HTTP server
   stdio                     Start MCP stdio transport (for Claude Desktop)
+  seed-history [options]    Index Claude Code history into R2 for AI Search
   load <path> <alias>       Load a directory/file into cache
   query <alias> <question>  Query a cached context
   list                      List all active caches
